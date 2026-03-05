@@ -1,0 +1,21 @@
+[package]
+name = "octorules-wirefilter"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Wirefilter expression parser FFI bindings for octorules"
+authors = ["Martin Simon", "Doctena S.A."]
+repository = "https://github.com/doctena-org/octorules-wirefilter"
+homepage = "https://github.com/doctena-org/octorules-wirefilter"
+keywords = ["cloudflare", "wirefilter", "parser", "ffi"]
+categories = ["parser-implementations", "api-bindings"]
+rust-version = "1.86"
+exclude = [".github/", "tests/"]
+
+[lib]
+name = "octorules_wirefilter"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+wirefilter-engine = { git = "https://github.com/cloudflare/wirefilter", rev = "6621924baf36f8ba7f603433dbe6f857ad3d5589" }

@@ -1,0 +1,13 @@
+# Rust
+/target/
+
+# Maturin build artifacts
+*.so
+*.dylib
+*.pyd
+
+# Python test cache
+__pycache__/
+
+# OS
+.DS_Store
