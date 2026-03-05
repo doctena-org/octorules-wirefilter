@@ -17,7 +17,7 @@ name = "octorules_wirefilter"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.23", features = ["extension-module"] }
+pyo3 = { version = "0.24", features = ["extension-module"] }
 # Pinned to specific commit: SchemeBuilder and function registration APIs
 # are not in the published crates.io wirefilter-engine v0.7.0.
 wirefilter-engine = { git = "https://github.com/cloudflare/wirefilter", rev = "6621924baf36f8ba7f603433dbe6f857ad3d5589" }
