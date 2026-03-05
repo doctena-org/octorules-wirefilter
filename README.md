@@ -81,7 +81,9 @@ Tests skip gracefully if the native extension is not installed.
 
 ## API
 
-This package exposes a single function:
+This package exposes two functions:
+
+### `parse_expression(expr, phase=None)`
 
 ```python
 from octorules_wirefilter import parse_expression
@@ -99,22 +101,41 @@ result = parse_expression('bogus_field eq "x"')
 ```
 
 **Returns** a dict with either:
-- On success: `fields`, `functions`, `operators`, `string_literals`, `regex_literals`, `ip_literals`, `int_literals` (all lists)
+- On success: `fields`, `functions`, `operators`, `string_literals`, `regex_literals`, `ip_literals`, `int_literals` (all lists). If AST nesting exceeded the depth limit, `depth_exceeded: true` is included.
 - On failure: `error` (string)
+
+Expressions exceeding 1 MiB are rejected with an error dict before parsing.
+Nesting depth is capped at 100 levels to prevent stack overflow on pathological input.
+
+### `get_schema_info()`
+
+```python
+from octorules_wirefilter import get_schema_info
+
+info = get_schema_info()
+# {'fields': [{'name': 'http.host', 'type': 'STRING'}, ...],
+#  'functions': ['lower', 'upper', ...],
+#  'transform_phases': ['url_rewrite_rules', ...],
+#  'transform_field_as_function': 'http.request.uri.path'}
+```
+
+Returns schema metadata for automated synchronization with the Python linter schemas. Field types use the Python `FieldType` enum names (`STRING`, `INT`, `BOOL`, `IP`, `ARRAY_STRING`, etc.).
 
 ## Contributing
 
+**Important:** Field and function registries exist in two places: `src/scheme.rs` (Rust — used by wirefilter for parsing and type checking) and `src/octorules/linter/schemas/` in the octorules repo (Python — used by the regex fallback parser and lint rules). A `sync_schemas.py` script in the octorules repo regenerates the Python schemas from wirefilter's `get_schema_info()` function, but Rust-side changes must still be made manually.
+
 ### Adding fields
 
-When Cloudflare adds new fields, update `src/scheme.rs` — add the field to `register_common_fields()` (shared by both schemes). If the field behaves differently in transform phases, add it to the scheme-specific sections instead.
+When Cloudflare adds new fields, update `src/scheme.rs` — add the field to `register_common_fields()` (shared by both schemes) **and** to the `COMMON_FIELD_NAMES` array. If the field behaves differently in transform phases, add it to the scheme-specific sections instead.
 
-Also update the field registry in the [octorules](https://github.com/doctena-org/octorules) repo: `src/octorules/linter/schemas/fields.py`.
+Then run `python scripts/sync_schemas.py` in the octorules repo to regenerate the Python schemas. If the field needs Python-only metadata (`requires_plan`, `is_response`), add it to `overlay.toml` first.
 
 ### Adding functions
 
-Update `src/scheme.rs` — register in `register_common_functions()` (for all phases) or in the `TRANSFORM_SCHEME` builder (for transform-only functions).
+Update `src/scheme.rs` — register in `register_common_functions()` (for all phases) or in the `TRANSFORM_SCHEME` builder (for transform-only functions). **Also** add the name to the `COMMON_FUNCTION_NAMES` array.
 
-Also update the function registry in the [octorules](https://github.com/doctena-org/octorules) repo: `src/octorules/linter/schemas/functions.py`.
+Then run `python scripts/sync_schemas.py` in the octorules repo. If the function needs `restricted_phases` or `requires_plan`, add it to `overlay.toml` first.
 
 ## Design decisions
 

@@ -26,3 +26,13 @@ Issues = "https://github.com/doctena-org/octorules-wirefilter/issues"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

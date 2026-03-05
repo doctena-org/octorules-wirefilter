@@ -5,17 +5,19 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call:  # Allow release.yml to call this workflow
 
 jobs:
-  check:
-    name: Cargo check
+  rust:
+    name: Cargo fmt + clippy + test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cargo check
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
 
-  test:
+  python:
     name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     strategy:
@@ -32,3 +34,15 @@ jobs:
       - run: .venv/bin/pip install maturin pytest
       - run: .venv/bin/maturin develop
       - run: .venv/bin/pytest tests/ -v
+
+  lint:
+    name: Ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check tests/
+      - run: ruff format --check tests/

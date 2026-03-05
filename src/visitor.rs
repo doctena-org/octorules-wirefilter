@@ -1,7 +1,7 @@
 //! AST visitor that extracts fields, functions, operators, and literals
 //! from a parsed wirefilter expression.
 
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::ops::RangeInclusive;
 
@@ -10,6 +10,9 @@ use wirefilter::{
     IndexExpr, IntOp, IntRange, IpRange, LogicalExpr, LogicalOp, OrderingOp, RhsValue, RhsValues,
     UnaryOp,
 };
+
+/// Maximum nesting depth before the extractor stops descending.
+const MAX_NESTING_DEPTH: usize = 100;
 
 /// Extracts all components from a wirefilter AST for the ExpressionInfo contract.
 pub struct ExpressionExtractor {
@@ -21,13 +24,16 @@ pub struct ExpressionExtractor {
     pub ip_literals: Vec<String>,
     pub int_literals: Vec<i64>,
 
-    seen_fields: BTreeSet<String>,
-    seen_functions: BTreeSet<String>,
-    seen_operators: BTreeSet<String>,
-    seen_strings: BTreeSet<String>,
-    seen_regexes: BTreeSet<String>,
-    seen_ips: BTreeSet<String>,
-    seen_ints: BTreeSet<i64>,
+    seen_fields: HashSet<String>,
+    seen_functions: HashSet<String>,
+    seen_operators: HashSet<String>,
+    seen_strings: HashSet<String>,
+    seen_regexes: HashSet<String>,
+    seen_ips: HashSet<String>,
+    seen_ints: HashSet<i64>,
+
+    depth: usize,
+    max_depth_exceeded: bool,
 }
 
 impl ExpressionExtractor {
@@ -40,49 +46,68 @@ impl ExpressionExtractor {
             regex_literals: Vec::new(),
             ip_literals: Vec::new(),
             int_literals: Vec::new(),
-            seen_fields: BTreeSet::new(),
-            seen_functions: BTreeSet::new(),
-            seen_operators: BTreeSet::new(),
-            seen_strings: BTreeSet::new(),
-            seen_regexes: BTreeSet::new(),
-            seen_ips: BTreeSet::new(),
-            seen_ints: BTreeSet::new(),
+            seen_fields: HashSet::new(),
+            seen_functions: HashSet::new(),
+            seen_operators: HashSet::new(),
+            seen_strings: HashSet::new(),
+            seen_regexes: HashSet::new(),
+            seen_ips: HashSet::new(),
+            seen_ints: HashSet::new(),
+            depth: 0,
+            max_depth_exceeded: false,
         }
     }
 
+    /// Returns true if the extractor hit the maximum nesting depth.
+    pub fn depth_exceeded(&self) -> bool {
+        self.max_depth_exceeded
+    }
+
     fn add_field(&mut self, name: &str) {
-        if self.seen_fields.insert(name.to_owned()) {
-            self.fields.push(name.to_owned());
+        if !self.seen_fields.contains(name) {
+            let s = name.to_owned();
+            self.seen_fields.insert(s.clone());
+            self.fields.push(s);
         }
     }
 
     fn add_function(&mut self, name: &str) {
-        if self.seen_functions.insert(name.to_owned()) {
-            self.functions.push(name.to_owned());
+        if !self.seen_functions.contains(name) {
+            let s = name.to_owned();
+            self.seen_functions.insert(s.clone());
+            self.functions.push(s);
         }
     }
 
     fn add_operator(&mut self, op: &str) {
-        if self.seen_operators.insert(op.to_owned()) {
-            self.operators.push(op.to_owned());
+        if !self.seen_operators.contains(op) {
+            let s = op.to_owned();
+            self.seen_operators.insert(s.clone());
+            self.operators.push(s);
         }
     }
 
     fn add_string(&mut self, s: &str) {
-        if self.seen_strings.insert(s.to_owned()) {
-            self.string_literals.push(s.to_owned());
+        if !self.seen_strings.contains(s) {
+            let owned = s.to_owned();
+            self.seen_strings.insert(owned.clone());
+            self.string_literals.push(owned);
         }
     }
 
     fn add_regex(&mut self, pattern: &str) {
-        if self.seen_regexes.insert(pattern.to_owned()) {
-            self.regex_literals.push(pattern.to_owned());
+        if !self.seen_regexes.contains(pattern) {
+            let s = pattern.to_owned();
+            self.seen_regexes.insert(s.clone());
+            self.regex_literals.push(s);
         }
     }
 
     fn add_ip(&mut self, ip_str: &str) {
-        if self.seen_ips.insert(ip_str.to_owned()) {
-            self.ip_literals.push(ip_str.to_owned());
+        if !self.seen_ips.contains(ip_str) {
+            let s = ip_str.to_owned();
+            self.seen_ips.insert(s.clone());
+            self.ip_literals.push(s);
         }
     }
 
@@ -238,6 +263,11 @@ impl ExpressionExtractor {
 
     /// Walk a function call argument.
     fn walk_function_arg(&mut self, arg: &FunctionCallArgExpr) {
+        if self.depth >= MAX_NESTING_DEPTH {
+            self.max_depth_exceeded = true;
+            return;
+        }
+        self.depth += 1;
         match arg {
             FunctionCallArgExpr::IndexExpr(index_expr) => {
                 self.walk_index_expr(index_expr);
@@ -249,10 +279,16 @@ impl ExpressionExtractor {
                 self.walk_logical(logical);
             }
         }
+        self.depth -= 1;
     }
 
     /// Recursively walk a logical expression tree.
     fn walk_logical(&mut self, expr: &LogicalExpr) {
+        if self.depth >= MAX_NESTING_DEPTH {
+            self.max_depth_exceeded = true;
+            return;
+        }
+        self.depth += 1;
         match expr {
             LogicalExpr::Combining { op, items } => {
                 self.add_operator(match op {
@@ -277,6 +313,7 @@ impl ExpressionExtractor {
                 self.walk_logical(arg);
             }
         }
+        self.depth -= 1;
     }
 
     /// Walk a comparison expression: LHS + operator + RHS literals.
