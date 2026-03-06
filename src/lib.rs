@@ -9,7 +9,7 @@ use pyo3::types::{PyDict, PyList};
 mod scheme;
 mod visitor;
 
-use scheme::{TRANSFORM_PHASES, get_scheme};
+use scheme::SCHEME;
 use visitor::ExpressionExtractor;
 
 /// Maximum allowed expression length (1 MiB).
@@ -17,12 +17,9 @@ const MAX_EXPRESSION_LEN: usize = 1_048_576;
 
 /// Parse a Cloudflare wirefilter expression and return extracted components.
 ///
-/// The optional `phase` parameter selects the appropriate wirefilter scheme:
-/// - Transform phases (`url_rewrite_rules`, `request_header_rules`,
-///   `response_header_rules`) use a scheme where `http.request.uri.path`
-///   is a callable function.
-/// - All other phases (or `None`) use the default scheme where
-///   `http.request.uri.path` is a regular field.
+/// The optional `phase` parameter is accepted for API compatibility but
+/// currently unused — all expressions are parsed against the single scheme
+/// where `http.request.uri.path` is a regular field.
 ///
 /// Returns a Python dict with:
 ///   - On success: `{"fields": [...], "functions": [...], "operators": [...], ...}`
@@ -63,9 +60,8 @@ fn parse_expression(py: Python<'_>, expr: &str, phase: Option<&str>) -> PyResult
         return Ok(dict.into());
     }
 
-    // Parse the expression against the phase-appropriate scheme.
-    let scheme = get_scheme(phase);
-    let ast = match scheme.parse(trimmed) {
+    let _ = phase; // accepted for API compat, unused
+    let ast = match SCHEME.parse(trimmed) {
         Ok(ast) => ast,
         Err(e) => {
             let dict = PyDict::new(py);
@@ -104,8 +100,6 @@ fn parse_expression(py: Python<'_>, expr: &str, phase: Option<&str>) -> PyResult
 /// Returns a Python dict with:
 ///   - `fields`: list of `{"name": "...", "type": "STRING"}` dicts
 ///   - `functions`: list of function name strings
-///   - `transform_phases`: list of transform phase name strings
-///   - `transform_field_as_function`: the field that becomes a function in transform phases
 #[pyfunction]
 fn get_schema_info(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
@@ -124,12 +118,6 @@ fn get_schema_info(py: Python<'_>) -> PyResult<Py<PyAny>> {
     // Functions
     let func_names = scheme::common_function_names();
     dict.set_item("functions", PyList::new(py, func_names)?)?;
-
-    // Transform phases
-    dict.set_item("transform_phases", PyList::new(py, TRANSFORM_PHASES)?)?;
-
-    // The field that becomes a function in transform phases
-    dict.set_item("transform_field_as_function", "http.request.uri.path")?;
 
     Ok(dict.into())
 }

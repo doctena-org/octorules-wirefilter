@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-03-06
+
+### Added
+- 3 JWT `exp` claim fields: `http.request.jwt.claims.exp.sec` (Map<Array<Int>>),
+  `http.request.jwt.claims.exp.sec.names` (Array<Bytes>),
+  `http.request.jwt.claims.exp.sec.values` (Array<Int>). Scheme now has
+  173 fields.
+- `# Panics` doc sections on `LazyLock` scheme registrations (replaced bare
+  `panic!` calls with documented `.expect()` calls).
+
+### Changed
+- Visitor `clone()` optimization: removed unnecessary clones in `add_field`,
+  `add_function`, `add_operator` — duplicates now require 0 allocations.
+
+### Removed
+- `TRANSFORM_SCHEME` and `TRANSFORM_PHASES` — octorules always uses a single
+  scheme where `http.request.uri.path` is a field (since octorules v0.12.1).
+  Transform-phase function-call syntax is handled on the Python side.
+- `get_scheme(phase)` dispatcher — replaced by direct `SCHEME` static.
+  `parse_expression()` still accepts `phase` for API compatibility but ignores it.
+- `get_schema_info()` no longer returns `transform_phases` or
+  `transform_field_as_function` keys.
+
 ## [0.3.0] - 2026-03-06
 
 ### Changed

@@ -65,49 +65,43 @@ impl ExpressionExtractor {
 
     fn add_field(&mut self, name: &str) {
         if !self.seen_fields.contains(name) {
-            let s = name.to_owned();
-            self.seen_fields.insert(s.clone());
-            self.fields.push(s);
+            self.seen_fields.insert(name.to_owned());
+            self.fields.push(name.to_owned());
         }
     }
 
     fn add_function(&mut self, name: &str) {
         if !self.seen_functions.contains(name) {
-            let s = name.to_owned();
-            self.seen_functions.insert(s.clone());
-            self.functions.push(s);
+            self.seen_functions.insert(name.to_owned());
+            self.functions.push(name.to_owned());
         }
     }
 
     fn add_operator(&mut self, op: &str) {
         if !self.seen_operators.contains(op) {
-            let s = op.to_owned();
-            self.seen_operators.insert(s.clone());
-            self.operators.push(s);
+            self.seen_operators.insert(op.to_owned());
+            self.operators.push(op.to_owned());
         }
     }
 
     fn add_string(&mut self, s: &str) {
         if !self.seen_strings.contains(s) {
-            let owned = s.to_owned();
-            self.seen_strings.insert(owned.clone());
-            self.string_literals.push(owned);
+            self.seen_strings.insert(s.to_owned());
+            self.string_literals.push(s.to_owned());
         }
     }
 
     fn add_regex(&mut self, pattern: &str) {
         if !self.seen_regexes.contains(pattern) {
-            let s = pattern.to_owned();
-            self.seen_regexes.insert(s.clone());
-            self.regex_literals.push(s);
+            self.seen_regexes.insert(pattern.to_owned());
+            self.regex_literals.push(pattern.to_owned());
         }
     }
 
     fn add_ip(&mut self, ip_str: &str) {
         if !self.seen_ips.contains(ip_str) {
-            let s = ip_str.to_owned();
-            self.seen_ips.insert(s.clone());
-            self.ip_literals.push(s);
+            self.seen_ips.insert(ip_str.to_owned());
+            self.ip_literals.push(ip_str.to_owned());
         }
     }
 

@@ -34,14 +34,13 @@ expression_bridge.py          Python-side routing layer
 
 `octorules` tries to import `octorules_wirefilter` at module load time. If available, expressions are parsed by the real Cloudflare wirefilter engine. On import failure or parse error, the bridge transparently falls back to regex extraction. Either path returns the same `ExpressionInfo` dataclass consumed by the linter.
 
-## Schemes
+## Scheme
 
-Two wirefilter schemes are built at startup and cached:
+A single wirefilter scheme is built at startup and cached:
 
-- **Default scheme** — 170 fields, 34 functions. Used for all phases except transform phases.
-- **Transform scheme** — 169 fields, 35 functions. `http.request.uri.path` is registered as a callable function (not a field) because transform phases treat it differently.
+- **173 fields** (including `http.request.uri.path`), **34 functions**.
 
-The `phase` parameter selects the scheme: `url_rewrite_rules`, `request_header_rules`, and `response_header_rules` use the transform scheme; everything else uses the default.
+The `phase` parameter is accepted for API compatibility but currently unused — all expressions are parsed against the same scheme. Transform-phase function-call syntax (where `http.request.uri.path` is callable) is handled on the Python side.
 
 ## Building from source
 
@@ -114,9 +113,7 @@ from octorules_wirefilter import get_schema_info
 
 info = get_schema_info()
 # {'fields': [{'name': 'http.host', 'type': 'STRING'}, ...],
-#  'functions': ['lower', 'upper', ...],
-#  'transform_phases': ['url_rewrite_rules', ...],
-#  'transform_field_as_function': 'http.request.uri.path'}
+#  'functions': ['lower', 'upper', ...]}
 ```
 
 Returns schema metadata for automated synchronization with the Python linter schemas. Field types use the Python `FieldType` enum names (`STRING`, `INT`, `BOOL`, `IP`, `ARRAY_STRING`, etc.).
@@ -127,13 +124,13 @@ Returns schema metadata for automated synchronization with the Python linter sch
 
 ### Adding fields
 
-When Cloudflare adds new fields, update `src/scheme.rs` — add the field to `register_common_fields()` (shared by both schemes) **and** to the `COMMON_FIELD_NAMES` array. If the field behaves differently in transform phases, add it to the scheme-specific sections instead.
+When Cloudflare adds new fields, update `src/scheme.rs` — add the field to `register_common_fields()` **and** to the `COMMON_FIELD_NAMES` array.
 
 Then run `python scripts/sync_schemas.py` in the octorules repo to regenerate the Python schemas. If the field needs Python-only metadata (`requires_plan`, `is_response`), add it to `overlay.toml` first.
 
 ### Adding functions
 
-Update `src/scheme.rs` — register in `register_common_functions()` (for all phases) or in the `TRANSFORM_SCHEME` builder (for transform-only functions). **Also** add the name to the `COMMON_FUNCTION_NAMES` array.
+Update `src/scheme.rs` — register in `register_common_functions()` and add the name to the `COMMON_FUNCTION_NAMES` array.
 
 Then run `python scripts/sync_schemas.py` in the octorules repo. If the function needs `restricted_phases` or `requires_plan`, add it to `overlay.toml` first.
 

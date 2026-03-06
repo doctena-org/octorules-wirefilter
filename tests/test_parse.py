@@ -330,64 +330,35 @@ class TestEmptyExpression:
         assert result["fields"] == []
 
 
-class TestPhaseContextParsing:
-    """Tests for phase-dependent scheme selection."""
+class TestPhaseParameter:
+    """Tests for the phase parameter (accepted for compat, ignored)."""
 
-    def test_no_phase_uses_default_scheme(self):
+    def test_no_phase(self):
         """Without phase, http.request.uri.path is a field."""
         result = parse_expression('http.request.uri.path eq "/test"')
         assert "error" not in result
         assert "http.request.uri.path" in result["fields"]
 
-    def test_none_phase_uses_default_scheme(self):
+    def test_none_phase(self):
         """Explicit None behaves the same as omitting phase."""
         result = parse_expression('http.request.uri.path eq "/test"', phase=None)
         assert "error" not in result
         assert "http.request.uri.path" in result["fields"]
 
-    def test_unknown_phase_uses_default_scheme(self):
-        """Non-transform phase falls back to default scheme."""
-        result = parse_expression(
-            'http.request.uri.path eq "/test"',
-            phase="http_request_firewall_custom",
-        )
-        assert "error" not in result
-        assert "http.request.uri.path" in result["fields"]
-
-    def test_url_rewrite_rules_uses_transform_scheme(self):
-        """In url_rewrite_rules, http.request.uri.path is a function."""
-        # This expression uses uri.path as a function call — should parse OK
-        # in transform scheme but fail in default scheme.
-        result = parse_expression(
-            'http.request.uri.path eq "/test"',
-            phase="url_rewrite_rules",
-        )
-        # uri.path is NOT a field in transform scheme, so this should error
-        assert "error" in result
-
-    def test_request_header_rules_uses_transform_scheme(self):
-        result = parse_expression(
-            'http.request.uri.path eq "/test"',
-            phase="request_header_rules",
-        )
-        assert "error" in result
-
-    def test_response_header_rules_uses_transform_scheme(self):
-        result = parse_expression(
-            'http.request.uri.path eq "/test"',
-            phase="response_header_rules",
-        )
-        assert "error" in result
-
-    def test_transform_phase_parses_uri_path_as_function(self):
-        """In transform phase, uri.path can be used as a function."""
-        # Use uri.path as a function wrapping another field
-        result = parse_expression(
-            'http.request.uri.path(http.request.uri) eq "/rewritten"',
-            phase="url_rewrite_rules",
-        )
-        assert "error" not in result, f"unexpected error: {result.get('error')}"
-        assert "http.request.uri.path" in result["functions"]
+    def test_phase_ignored(self):
+        """Phase parameter is accepted but ignored — always uses same scheme."""
+        for phase in (
+            "http_request_firewall_custom",
+            "url_rewrite_rules",
+            "request_header_rules",
+            "response_header_rules",
+        ):
+            result = parse_expression(
+                'http.request.uri.path eq "/test"',
+                phase=phase,
+            )
+            assert "error" not in result, f"phase={phase}: {result.get('error')}"
+            assert "http.request.uri.path" in result["fields"]
 
 
 class TestIsTimedHmacValidV0:
@@ -699,7 +670,7 @@ class TestGetSchemaInfo:
 
     def test_has_required_keys(self):
         info = get_schema_info()
-        for key in ("fields", "functions", "transform_phases", "transform_field_as_function"):
+        for key in ("fields", "functions"):
             assert key in info, f"missing key: {key}"
 
     def test_fields_are_list_of_dicts(self):
@@ -734,18 +705,6 @@ class TestGetSchemaInfo:
         assert len(info["functions"]) > 30
         for name in info["functions"]:
             assert isinstance(name, str)
-
-    def test_transform_phases(self):
-        info = get_schema_info()
-        assert set(info["transform_phases"]) == {
-            "url_rewrite_rules",
-            "request_header_rules",
-            "response_header_rules",
-        }
-
-    def test_transform_field_as_function(self):
-        info = get_schema_info()
-        assert info["transform_field_as_function"] == "http.request.uri.path"
 
     def test_known_field_present(self):
         info = get_schema_info()

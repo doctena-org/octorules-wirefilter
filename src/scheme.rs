@@ -1,14 +1,9 @@
 //! Wirefilter field scheme builder.
 //!
 //! Registers Cloudflare fields and functions with their types.
-//! Two schemes are built once and cached in `LazyLock` statics:
+//! A single scheme is built once and cached in a `LazyLock` static:
 //!
-//! - `DEFAULT_SCHEME` — 170 fields (incl. `http.request.uri.path`), 34 functions.
-//!   Used for all phases except transform phases.
-//!
-//! - `TRANSFORM_SCHEME` — 169 fields, 35 functions. `http.request.uri.path` is
-//!   registered as a function (not a field) because in transform phases it is
-//!   callable.
+//! - `SCHEME` — 173 fields (incl. `http.request.uri.path`), 34 functions.
 //!
 //! # Panics
 //!
@@ -95,54 +90,21 @@ fn any_param(val_type: Type) -> SimpleFunctionParam {
     }
 }
 
-/// Transform phases where `http.request.uri.path` is a callable function
-/// rather than a plain field.  Must match `_TRANSFORM_PHASES` in
-/// `src/octorules/linter/schemas/functions.py`.
-pub const TRANSFORM_PHASES: &[&str] = &[
-    "url_rewrite_rules",
-    "request_header_rules",
-    "response_header_rules",
-];
-
-/// Default scheme — used for all non-transform phases.
-pub static DEFAULT_SCHEME: LazyLock<Scheme> = LazyLock::new(|| {
+/// The wirefilter scheme — 173 fields, 34 functions.
+///
+/// `http.request.uri.path` is registered as a regular field. octorules always
+/// uses this single scheme for all phases; transform-phase function-call syntax
+/// is handled on the Python side.
+pub static SCHEME: LazyLock<Scheme> = LazyLock::new(|| {
     let mut b = SchemeBuilder::new();
     register_common_fields(&mut b);
-    // In the default scheme, http.request.uri.path is a regular field.
     b.add_field("http.request.uri.path", Type::Bytes).unwrap();
     register_common_functions(&mut b);
     b.build()
 });
 
-/// Transform scheme — used for `url_rewrite_rules`, `request_header_rules`,
-/// and `response_header_rules`.  `http.request.uri.path` is registered as a
-/// function (Bytes → Bytes) instead of a field.
-pub static TRANSFORM_SCHEME: LazyLock<Scheme> = LazyLock::new(|| {
-    let mut b = SchemeBuilder::new();
-    register_common_fields(&mut b);
-    register_common_functions(&mut b);
-    // In transform phases, http.request.uri.path is a callable function.
-    b.add_function(
-        "http.request.uri.path",
-        simple_fn(vec![field_param(Type::Bytes)], Type::Bytes),
-    )
-    .unwrap();
-    b.build()
-});
-
-/// Return the appropriate scheme for the given phase.
-///
-/// - `None` or unknown phase → `DEFAULT_SCHEME`
-/// - One of the 3 transform phases → `TRANSFORM_SCHEME`
-pub fn get_scheme(phase: Option<&str>) -> &'static Scheme {
-    match phase {
-        Some(p) if TRANSFORM_PHASES.contains(&p) => &TRANSFORM_SCHEME,
-        _ => &DEFAULT_SCHEME,
-    }
-}
-
-/// Register fields shared by both schemes (everything except
-/// `http.request.uri.path`, which is scheme-specific).
+/// Register common fields (everything except `http.request.uri.path`,
+/// which is added separately in the `SCHEME` static).
 fn register_common_fields(b: &mut SchemeBuilder) {
     // --- BEGIN GENERATED FIELDS --- //
     b.add_field("cf.api_gateway.auth_id_present", Type::Bool)
@@ -391,6 +353,21 @@ fn register_common_fields(b: &mut SchemeBuilder) {
     b.add_field(
         "http.request.jwt.claims.aud.values",
         Type::Array(Type::Bytes.into()),
+    )
+    .unwrap();
+    b.add_field(
+        "http.request.jwt.claims.exp.sec",
+        Type::Map(Type::Array(Type::Int.into()).into()),
+    )
+    .unwrap();
+    b.add_field(
+        "http.request.jwt.claims.exp.sec.names",
+        Type::Array(Type::Bytes.into()),
+    )
+    .unwrap();
+    b.add_field(
+        "http.request.jwt.claims.exp.sec.values",
+        Type::Array(Type::Int.into()),
     )
     .unwrap();
     b.add_field(
@@ -890,7 +867,7 @@ fn register_common_functions(b: &mut SchemeBuilder) {
 
 /// Common field definitions as `(name, python_type)` tuples.
 ///
-/// Does NOT include `http.request.uri.path` (scheme-specific) or deprecated fields.
+/// Does NOT include `http.request.uri.path` (added separately) or deprecated fields.
 pub fn common_field_defs() -> &'static [(&'static str, &'static str)] {
     static FIELD_DEFS: LazyLock<Vec<(&'static str, &'static str)>> = LazyLock::new(|| {
         // Map wirefilter Type → Python FieldType enum name by inspecting the
@@ -910,10 +887,12 @@ pub fn common_field_defs() -> &'static [(&'static str, &'static str)] {
                             let inner2_ty: Type = inner2.into();
                             match inner2_ty {
                                 Type::Bytes => "ARRAY_ARRAY_STRING",
-                                _ => "STRING",
+                                other => {
+                                    panic!("unmapped Array(Array({other:?})) in type_to_python")
+                                }
                             }
                         }
-                        _ => "STRING",
+                        other => panic!("unmapped Array({other:?}) in type_to_python"),
                     }
                 }
                 Type::Map(inner) => {
@@ -924,10 +903,10 @@ pub fn common_field_defs() -> &'static [(&'static str, &'static str)] {
                             match inner2_ty {
                                 Type::Bytes => "MAP_ARRAY_STRING",
                                 Type::Int => "MAP_ARRAY_INT",
-                                _ => "STRING",
+                                other => panic!("unmapped Map(Array({other:?})) in type_to_python"),
                             }
                         }
-                        _ => "STRING",
+                        other => panic!("unmapped Map({other:?}) in type_to_python"),
                     }
                 }
             }
@@ -936,9 +915,9 @@ pub fn common_field_defs() -> &'static [(&'static str, &'static str)] {
         COMMON_FIELD_NAMES
             .iter()
             .map(|name| {
-                let field = DEFAULT_SCHEME.get_field(name).unwrap_or_else(|_| {
-                    panic!("COMMON_FIELD_NAMES entry {name:?} not in DEFAULT_SCHEME")
-                });
+                let field = SCHEME
+                    .get_field(name)
+                    .unwrap_or_else(|_| panic!("COMMON_FIELD_NAMES entry {name:?} not in SCHEME"));
                 (*name, type_to_python(&field.get_type()))
             })
             .collect()
@@ -946,15 +925,13 @@ pub fn common_field_defs() -> &'static [(&'static str, &'static str)] {
     &FIELD_DEFS
 }
 
-/// Common function names shared by both schemes.
-///
-/// Does NOT include `http.request.uri.path` (transform-specific).
+/// Function names registered in the scheme.
 pub fn common_function_names() -> &'static [&'static str] {
     COMMON_FUNCTION_NAMES
 }
 
 /// Field names registered in `register_common_fields`, in registration order.
-/// Excludes `http.request.uri.path` (scheme-specific) and deprecated/account fields.
+/// Excludes `http.request.uri.path` (added separately) and deprecated/account fields.
 const COMMON_FIELD_NAMES: &[&str] = &[
     "cf.api_gateway.auth_id_present",
     "cf.api_gateway.fallthrough_detected",
@@ -1057,6 +1034,9 @@ const COMMON_FIELD_NAMES: &[&str] = &[
     "http.request.jwt.claims.aud",
     "http.request.jwt.claims.aud.names",
     "http.request.jwt.claims.aud.values",
+    "http.request.jwt.claims.exp.sec",
+    "http.request.jwt.claims.exp.sec.names",
+    "http.request.jwt.claims.exp.sec.values",
     "http.request.jwt.claims.iat.sec",
     "http.request.jwt.claims.iat.sec.names",
     "http.request.jwt.claims.iat.sec.values",
@@ -1119,7 +1099,7 @@ const COMMON_FIELD_NAMES: &[&str] = &[
     "ssl",
 ];
 
-/// Function names shared by both schemes (excludes `http.request.uri.path`).
+/// Function names registered in the scheme.
 const COMMON_FUNCTION_NAMES: &[&str] = &[
     "any",
     "all",
@@ -1161,122 +1141,54 @@ const COMMON_FUNCTION_NAMES: &[&str] = &[
 mod tests {
     use super::*;
 
-    // ── DEFAULT_SCHEME tests ─────────────────────────────────────────
+    // ── SCHEME tests ─────────────────────────────────────────
 
     #[test]
-    fn default_scheme_has_all_fields() {
-        // 169 common + 1 (http.request.uri.path as field) = 170
-        assert_eq!(DEFAULT_SCHEME.field_count(), 170);
+    fn scheme_has_all_fields() {
+        // 172 common + 1 (http.request.uri.path) = 173
+        assert_eq!(SCHEME.field_count(), 173);
     }
 
     #[test]
-    fn default_scheme_has_all_functions() {
+    fn scheme_has_all_functions() {
         // 3 built-in (any, all, concat) + 31 custom = 34
-        assert_eq!(DEFAULT_SCHEME.function_count(), 34);
+        assert_eq!(SCHEME.function_count(), 34);
     }
 
     #[test]
-    fn default_scheme_uri_path_is_field() {
-        let field = DEFAULT_SCHEME.get_field("http.request.uri.path").unwrap();
+    fn scheme_uri_path_is_field() {
+        let field = SCHEME.get_field("http.request.uri.path").unwrap();
         assert_eq!(field.name(), "http.request.uri.path");
     }
 
     #[test]
-    fn default_scheme_uri_path_is_not_function() {
-        assert!(
-            DEFAULT_SCHEME
-                .get_function("http.request.uri.path")
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn default_scheme_can_parse_uri_path_as_field() {
-        let result = DEFAULT_SCHEME.parse(r#"http.request.uri.path eq "/test""#);
+    fn scheme_can_parse_uri_path_as_field() {
+        let result = SCHEME.parse(r#"http.request.uri.path eq "/test""#);
         assert!(result.is_ok(), "parse failed: {:?}", result.err());
     }
 
-    // ── TRANSFORM_SCHEME tests ───────────────────────────────────────
-
-    #[test]
-    fn transform_scheme_has_fields() {
-        // 169 common fields (no http.request.uri.path)
-        assert_eq!(TRANSFORM_SCHEME.field_count(), 169);
-    }
-
-    #[test]
-    fn transform_scheme_has_functions() {
-        // 34 common + 1 (http.request.uri.path as function) = 35
-        assert_eq!(TRANSFORM_SCHEME.function_count(), 35);
-    }
-
-    #[test]
-    fn transform_scheme_uri_path_is_function() {
-        TRANSFORM_SCHEME
-            .get_function("http.request.uri.path")
-            .unwrap();
-    }
-
-    #[test]
-    fn transform_scheme_uri_path_is_not_field() {
-        assert!(TRANSFORM_SCHEME.get_field("http.request.uri.path").is_err());
-    }
-
-    // ── get_scheme dispatcher tests ──────────────────────────────────
-
-    #[test]
-    fn get_scheme_none_returns_default() {
-        let s = get_scheme(None);
-        assert_eq!(s.field_count(), 170);
-    }
-
-    #[test]
-    fn get_scheme_unknown_phase_returns_default() {
-        let s = get_scheme(Some("http_request_firewall_custom"));
-        assert_eq!(s.field_count(), 170);
-    }
-
-    #[test]
-    fn get_scheme_url_rewrite_rules_returns_transform() {
-        let s = get_scheme(Some("url_rewrite_rules"));
-        assert_eq!(s.field_count(), 169);
-        assert_eq!(s.function_count(), 35);
-    }
-
-    #[test]
-    fn get_scheme_request_header_rules_returns_transform() {
-        let s = get_scheme(Some("request_header_rules"));
-        assert_eq!(s.function_count(), 35);
-    }
-
-    #[test]
-    fn get_scheme_response_header_rules_returns_transform() {
-        let s = get_scheme(Some("response_header_rules"));
-        assert_eq!(s.function_count(), 35);
-    }
-
-    // ── Existing tests (updated to use DEFAULT_SCHEME) ───────────────
+    // ── Field and function lookup tests ──────────────────────
 
     #[test]
     fn can_look_up_http_host() {
-        let field = DEFAULT_SCHEME.get_field("http.host").unwrap();
+        let field = SCHEME.get_field("http.host").unwrap();
         assert_eq!(field.name(), "http.host");
     }
 
     #[test]
     fn can_look_up_ip_src() {
-        let field = DEFAULT_SCHEME.get_field("ip.src").unwrap();
+        let field = SCHEME.get_field("ip.src").unwrap();
         assert_eq!(field.name(), "ip.src");
     }
 
     #[test]
     fn can_look_up_function_lower() {
-        DEFAULT_SCHEME.get_function("lower").unwrap();
+        SCHEME.get_function("lower").unwrap();
     }
 
     #[test]
     fn can_parse_simple_expression() {
-        let result = DEFAULT_SCHEME.parse(r#"http.host eq "example.com""#);
+        let result = SCHEME.parse(r#"http.host eq "example.com""#);
         assert!(result.is_ok(), "parse failed: {:?}", result.err());
     }
 }
