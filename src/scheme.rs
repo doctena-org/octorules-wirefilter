@@ -9,6 +9,14 @@
 //! - `TRANSFORM_SCHEME` — 169 fields, 35 functions. `http.request.uri.path` is
 //!   registered as a function (not a field) because in transform phases it is
 //!   callable.
+//!
+//! # Panics
+//!
+//! Field and function registrations use `.unwrap()` throughout. This is
+//! intentional: registrations happen once at process startup inside `LazyLock`
+//! statics, not at runtime. A registration failure means a programmer error
+//! (e.g. duplicate field name, wrong type) and should be caught immediately
+//! rather than silently ignored.
 
 use std::sync::LazyLock;
 
