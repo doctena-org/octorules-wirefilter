@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-03-06
+
+### Changed
+- Upgraded PyO3 from 0.24 to 0.28, enabling Python 3.14 support.
+- Added Python 3.14 to CI test matrix and release wheel builds.
+- Release wheel builds now use `--find-interpreter` instead of explicit
+  version list.
+- Bumped GitHub Actions (`checkout`, `setup-python`, `upload-artifact`,
+  `download-artifact`) to v6.
+
 ## [0.2.0] - 2026-03-05
 
 ### Added

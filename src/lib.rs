@@ -25,14 +25,14 @@ const MAX_EXPRESSION_LEN: usize = 1_048_576;
 ///   `http.request.uri.path` is a regular field.
 ///
 /// Returns a Python dict with:
-///   - On success: {"fields": [...], "functions": [...], "operators": [...], ...}
-///   - On failure: {"error": "parse error description"}
+///   - On success: `{"fields": [...], "functions": [...], "operators": [...], ...}`
+///   - On failure: `{"error": "parse error description"}`
 ///
 /// Empty or whitespace-only expressions are valid and return empty lists
 /// for all keys (not an error dict).
 #[pyfunction]
 #[pyo3(signature = (expr, phase=None))]
-fn parse_expression(py: Python<'_>, expr: &str, phase: Option<&str>) -> PyResult<PyObject> {
+fn parse_expression(py: Python<'_>, expr: &str, phase: Option<&str>) -> PyResult<Py<PyAny>> {
     // Reject oversized expressions before any processing.
     if expr.len() > MAX_EXPRESSION_LEN {
         let dict = PyDict::new(py);
@@ -107,7 +107,7 @@ fn parse_expression(py: Python<'_>, expr: &str, phase: Option<&str>) -> PyResult
 ///   - `transform_phases`: list of transform phase name strings
 ///   - `transform_field_as_function`: the field that becomes a function in transform phases
 #[pyfunction]
-fn get_schema_info(py: Python<'_>) -> PyResult<PyObject> {
+fn get_schema_info(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
 
     // Fields

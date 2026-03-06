@@ -25,16 +25,13 @@ jobs:
           - target: aarch64
             runner: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      # PyO3 0.23 supports up to Python 3.13. Do NOT use --find-interpreter
-      # here — the manylinux container includes Python 3.14 which PyO3 0.23
-      # rejects. Specify supported versions explicitly instead.
+      - uses: actions/checkout@v6
       - uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad  # v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist -i python3.10 -i python3.11 -i python3.12 -i python3.13
+          args: --release --out dist --find-interpreter
           manylinux: auto
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: wheels-linux-${{ matrix.target }}
           path: dist/*.whl
@@ -47,19 +44,20 @@ jobs:
       matrix:
         target: [x86_64, aarch64]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: |
             3.10
             3.11
             3.12
             3.13
+            3.14
       - uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad  # v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist -i python3.10 -i python3.11 -i python3.12 -i python3.13
-      - uses: actions/upload-artifact@v4
+          args: --release --out dist --find-interpreter
+      - uses: actions/upload-artifact@v6
         with:
           name: wheels-macos-${{ matrix.target }}
           path: dist/*.whl
@@ -69,19 +67,20 @@ jobs:
     needs: [ci]
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: |
             3.10
             3.11
             3.12
             3.13
+            3.14
       - uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad  # v1
         with:
           target: x86_64
-          args: --release --out dist -i python3.10 -i python3.11 -i python3.12 -i python3.13
-      - uses: actions/upload-artifact@v4
+          args: --release --out dist --find-interpreter
+      - uses: actions/upload-artifact@v6
         with:
           name: wheels-windows-x86_64
           path: dist/*.whl
@@ -91,12 +90,12 @@ jobs:
     needs: [ci]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad  # v1
         with:
           command: sdist
           args: --out dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: sdist
           path: dist/*.tar.gz
@@ -107,7 +106,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           path: dist
           merge-multiple: true
@@ -120,8 +119,8 @@ jobs:
     needs: [publish]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v6
         with:
           path: dist
           merge-multiple: true

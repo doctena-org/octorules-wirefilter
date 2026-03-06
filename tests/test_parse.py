@@ -138,6 +138,74 @@ class TestFunctionExtraction:
         result = parse_expression('has_key(http.request.headers, "x-api-key")')
         assert "has_key" in result["functions"]
 
+    def test_upper(self):
+        result = parse_expression('upper(http.host) eq "EXAMPLE.COM"')
+        assert "upper" in result["functions"]
+
+    def test_url_decode(self):
+        result = parse_expression('url_decode(http.request.uri.path) eq "/hello world"')
+        assert "url_decode" in result["functions"]
+
+    def test_uuidv4(self):
+        result = parse_expression('uuidv4(http.request.uri.path) eq "test"')
+        assert "uuidv4" in result["functions"]
+
+    def test_contains_function(self):
+        result = parse_expression('contains(http.host, "example")')
+        assert "contains" in result["functions"]
+
+    def test_len(self):
+        result = parse_expression("len(http.host) gt 10")
+        assert "len" in result["functions"]
+
+    def test_substring(self):
+        result = parse_expression('substring(http.host, 0, 5) eq "examp"')
+        assert "substring" in result["functions"]
+
+    def test_regex_replace(self):
+        result = parse_expression('regex_replace(http.request.uri.path, "/old", "/new") eq "/new"')
+        assert "regex_replace" in result["functions"]
+
+    def test_remove_bytes(self):
+        result = parse_expression('remove_bytes(http.host, "www.") eq "example.com"')
+        assert "remove_bytes" in result["functions"]
+
+    def test_to_string(self):
+        result = parse_expression('to_string(cf.threat_score) eq "50"')
+        assert "to_string" in result["functions"]
+
+    def test_lookup_json_string(self):
+        result = parse_expression('lookup_json_string(http.request.body.raw, "key") eq "value"')
+        assert "lookup_json_string" in result["functions"]
+
+    def test_lookup_json_integer(self):
+        result = parse_expression('lookup_json_integer(http.request.body.raw, "count") gt 0')
+        assert "lookup_json_integer" in result["functions"]
+
+    def test_sha256(self):
+        result = parse_expression('sha256(http.request.body.raw) eq "abc"')
+        assert "sha256" in result["functions"]
+
+    def test_sha512(self):
+        result = parse_expression('sha512(http.request.body.raw) eq "abc"')
+        assert "sha512" in result["functions"]
+
+    def test_hmac(self):
+        result = parse_expression('hmac(http.request.uri.path, "secret", "sha256") eq "abc"')
+        assert "hmac" in result["functions"]
+
+    def test_ip_in_range(self):
+        result = parse_expression('ip_in_range(ip.src, "10.0.0.0/8")')
+        assert "ip_in_range" in result["functions"]
+
+    def test_has_value(self):
+        result = parse_expression('has_value(http.request.headers.names, "x-api-key")')
+        assert "has_value" in result["functions"]
+
+    def test_bit_slice(self):
+        result = parse_expression("bit_slice(http.request.body.raw, 0, 8) gt 0")
+        assert "bit_slice" in result["functions"]
+
     def test_wildcard_replace(self):
         expr = 'wildcard_replace(http.host, "*.example.com", "${1}.cdn.com") eq "a.cdn.com"'
         result = parse_expression(expr)
