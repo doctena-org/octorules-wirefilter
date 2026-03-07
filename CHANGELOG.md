@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2] - 2026-03-07
+
+### Fixed
+- `parse_expression()` error responses (syntax errors, oversized input) now
+  include all 7 standard keys (`fields`, `functions`, `operators`,
+  `string_literals`, `regex_literals`, `ip_literals`, `int_literals`) with
+  empty lists, matching the structure of successful responses. Previously,
+  error dicts only contained the `error` key, forcing callers to check for
+  key existence before accessing fields.
+- Extracted `RESULT_KEYS` constant and `set_empty_result_keys()` helper in
+  `lib.rs` — eliminates 3× copy-pasted error response dict construction.
+
+### Changed
+- `dedup_add!` macro replaces 6 near-identical `add_field`/`add_function`/etc.
+  methods in `ExpressionExtractor`. Each uses `HashSet::insert()` return value
+  to avoid the `contains()` + `insert()` double-lookup.
+- `extract_explicit_ip_range<T: Display + PartialEq>` generic method eliminates
+  duplicate IPv4/IPv6 range extraction logic.
+- Error responses use `PyList::empty(py)` instead of allocating empty `Vec`s.
+
+### Added
+- Scheme count assertion tests: `COMMON_FIELD_NAMES` (164) and
+  `COMMON_FUNCTION_NAMES` (34) — guards against accidental additions/removals.
+
 ## [0.3.1] - 2026-03-06
 
 ### Added

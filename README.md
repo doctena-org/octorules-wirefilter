@@ -99,9 +99,9 @@ result = parse_expression('bogus_field eq "x"')
 # {'error': 'unknown field bogus_field'}
 ```
 
-**Returns** a dict with either:
-- On success: `fields`, `functions`, `operators`, `string_literals`, `regex_literals`, `ip_literals`, `int_literals` (all lists). If AST nesting exceeded the depth limit, `depth_exceeded: true` is included.
-- On failure: `error` (string)
+**Returns** a dict with keys `fields`, `functions`, `operators`, `string_literals`, `regex_literals`, `ip_literals`, `int_literals` (all lists), plus:
+- On success: lists populated with extracted values. If AST nesting exceeded the depth limit, `depth_exceeded: true` is included.
+- On failure: `error` (string) with all list keys present but empty.
 
 Expressions exceeding 1 MiB are rejected with an error dict before parsing.
 Nesting depth is capped at 100 levels to prevent stack overflow on pathological input.

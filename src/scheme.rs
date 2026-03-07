@@ -1150,6 +1150,20 @@ mod tests {
     }
 
     #[test]
+    fn common_field_names_array_length() {
+        // COMMON_FIELD_NAMES is the subset exposed via get_schema_info().
+        // 164 names + 1 hardcoded (http.request.uri.path) + 8 registered
+        // but intentionally excluded from sync = 173 total scheme fields.
+        assert_eq!(COMMON_FIELD_NAMES.len(), 164);
+    }
+
+    #[test]
+    fn common_function_names_array_length() {
+        // COMMON_FUNCTION_NAMES lists all functions exposed via get_schema_info().
+        assert_eq!(COMMON_FUNCTION_NAMES.len(), 34);
+    }
+
+    #[test]
     fn scheme_has_all_functions() {
         // 3 built-in (any, all, concat) + 31 custom = 34
         assert_eq!(SCHEME.function_count(), 34);

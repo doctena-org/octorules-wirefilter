@@ -60,6 +60,22 @@ class TestParseExpression:
         result = parse_expression("http.host eq eq")
         assert "error" in result
 
+    def test_error_response_has_all_keys(self):
+        """Parse error responses should include all standard keys for API consistency."""
+        result = parse_expression("http.host eq eq")
+        assert "error" in result
+        for key in (
+            "fields",
+            "functions",
+            "operators",
+            "string_literals",
+            "regex_literals",
+            "ip_literals",
+            "int_literals",
+        ):
+            assert key in result, f"Missing key {key!r} in error response"
+            assert result[key] == []
+
 
 class TestFieldExtraction:
     """Field extraction from various expression types."""
@@ -516,11 +532,23 @@ class TestInputLimits:
     """Boundary and stress tests for input validation."""
 
     def test_rejects_oversized_expression(self):
-        """Expression > 1 MiB is rejected with an error dict."""
+        """Expression > 1 MiB is rejected with an error dict with all keys."""
         huge = 'http.host eq "' + "x" * (2 * 1024 * 1024) + '"'
         result = parse_expression(huge)
         assert "error" in result
         assert "maximum length" in result["error"]
+        # Error responses should include all standard keys for API consistency
+        for key in (
+            "fields",
+            "functions",
+            "operators",
+            "string_literals",
+            "regex_literals",
+            "ip_literals",
+            "int_literals",
+        ):
+            assert key in result, f"Missing key {key!r} in oversized error response"
+            assert result[key] == []
 
     def test_accepts_expression_near_limit(self):
         """500 KiB expression is accepted (not a size limit error)."""

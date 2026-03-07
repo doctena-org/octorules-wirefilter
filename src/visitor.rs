@@ -2,6 +2,7 @@
 //! from a parsed wirefilter expression.
 
 use std::collections::HashSet;
+use std::fmt::Display;
 use std::net::IpAddr;
 use std::ops::RangeInclusive;
 
@@ -13,6 +14,20 @@ use wirefilter::{
 
 /// Maximum nesting depth before the extractor stops descending.
 const MAX_NESTING_DEPTH: usize = 100;
+
+/// Generate a dedup-add method that uses `HashSet::insert()` to avoid the
+/// `contains` + `insert` double-lookup, and allocates once (for the set)
+/// then clones (for the vec) per unique entry.
+macro_rules! dedup_add {
+    ($method:ident, $seen:ident, $list:ident) => {
+        fn $method(&mut self, value: &str) {
+            let owned = value.to_owned();
+            if self.$seen.insert(owned.clone()) {
+                self.$list.push(owned);
+            }
+        }
+    };
+}
 
 /// Extracts all components from a wirefilter AST for the ExpressionInfo contract.
 pub struct ExpressionExtractor {
@@ -63,47 +78,12 @@ impl ExpressionExtractor {
         self.max_depth_exceeded
     }
 
-    fn add_field(&mut self, name: &str) {
-        if !self.seen_fields.contains(name) {
-            self.seen_fields.insert(name.to_owned());
-            self.fields.push(name.to_owned());
-        }
-    }
-
-    fn add_function(&mut self, name: &str) {
-        if !self.seen_functions.contains(name) {
-            self.seen_functions.insert(name.to_owned());
-            self.functions.push(name.to_owned());
-        }
-    }
-
-    fn add_operator(&mut self, op: &str) {
-        if !self.seen_operators.contains(op) {
-            self.seen_operators.insert(op.to_owned());
-            self.operators.push(op.to_owned());
-        }
-    }
-
-    fn add_string(&mut self, s: &str) {
-        if !self.seen_strings.contains(s) {
-            self.seen_strings.insert(s.to_owned());
-            self.string_literals.push(s.to_owned());
-        }
-    }
-
-    fn add_regex(&mut self, pattern: &str) {
-        if !self.seen_regexes.contains(pattern) {
-            self.seen_regexes.insert(pattern.to_owned());
-            self.regex_literals.push(pattern.to_owned());
-        }
-    }
-
-    fn add_ip(&mut self, ip_str: &str) {
-        if !self.seen_ips.contains(ip_str) {
-            self.seen_ips.insert(ip_str.to_owned());
-            self.ip_literals.push(ip_str.to_owned());
-        }
-    }
+    dedup_add!(add_field, seen_fields, fields);
+    dedup_add!(add_function, seen_functions, functions);
+    dedup_add!(add_operator, seen_operators, operators);
+    dedup_add!(add_string, seen_strings, string_literals);
+    dedup_add!(add_regex, seen_regexes, regex_literals);
+    dedup_add!(add_ip, seen_ips, ip_literals);
 
     fn add_int(&mut self, val: i64) {
         if self.seen_ints.insert(val) {
@@ -139,6 +119,14 @@ impl ExpressionExtractor {
         }
     }
 
+    /// Extract start (and end if different) from an explicit IP range.
+    fn extract_explicit_ip_range<T: Display + PartialEq>(&mut self, start: &T, end: &T) {
+        self.add_ip(&start.to_string());
+        if start != end {
+            self.add_ip(&end.to_string());
+        }
+    }
+
     /// Extract IP from an IpRange.
     fn extract_ip_range(&mut self, range: &IpRange) {
         match range {
@@ -146,18 +134,8 @@ impl ExpressionExtractor {
                 self.add_ip(&cidr.to_string());
             }
             IpRange::Explicit(explicit) => match explicit {
-                ExplicitIpRange::V4(r) => {
-                    self.add_ip(&r.start().to_string());
-                    if r.start() != r.end() {
-                        self.add_ip(&r.end().to_string());
-                    }
-                }
-                ExplicitIpRange::V6(r) => {
-                    self.add_ip(&r.start().to_string());
-                    if r.start() != r.end() {
-                        self.add_ip(&r.end().to_string());
-                    }
-                }
+                ExplicitIpRange::V4(r) => self.extract_explicit_ip_range(r.start(), r.end()),
+                ExplicitIpRange::V6(r) => self.extract_explicit_ip_range(r.start(), r.end()),
             },
         }
     }

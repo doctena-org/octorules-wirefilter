@@ -15,6 +15,25 @@ use visitor::ExpressionExtractor;
 /// Maximum allowed expression length (1 MiB).
 const MAX_EXPRESSION_LEN: usize = 1_048_576;
 
+/// Standard result keys returned by `parse_expression`.
+const RESULT_KEYS: &[&str] = &[
+    "fields",
+    "functions",
+    "operators",
+    "string_literals",
+    "regex_literals",
+    "ip_literals",
+];
+
+/// Populate a Python dict with empty lists for all standard result keys.
+fn set_empty_result_keys(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<()> {
+    for key in RESULT_KEYS {
+        dict.set_item(*key, PyList::empty(py))?;
+    }
+    dict.set_item("int_literals", PyList::empty(py))?;
+    Ok(())
+}
+
 /// Parse a Cloudflare wirefilter expression and return extracted components.
 ///
 /// The optional `phase` parameter is accepted for API compatibility but
@@ -41,6 +60,7 @@ fn parse_expression(py: Python<'_>, expr: &str, phase: Option<&str>) -> PyResult
                 MAX_EXPRESSION_LEN
             ),
         )?;
+        set_empty_result_keys(py, &dict)?;
         return Ok(dict.into());
     }
 
@@ -48,15 +68,7 @@ fn parse_expression(py: Python<'_>, expr: &str, phase: Option<&str>) -> PyResult
     let trimmed = expr.trim();
     if trimmed.is_empty() {
         let dict = PyDict::new(py);
-        let empty: Vec<String> = Vec::new();
-        dict.set_item("fields", PyList::new(py, &empty)?)?;
-        dict.set_item("functions", PyList::new(py, &empty)?)?;
-        dict.set_item("operators", PyList::new(py, &empty)?)?;
-        dict.set_item("string_literals", PyList::new(py, &empty)?)?;
-        dict.set_item("regex_literals", PyList::new(py, &empty)?)?;
-        dict.set_item("ip_literals", PyList::new(py, &empty)?)?;
-        let empty_ints: Vec<i64> = Vec::new();
-        dict.set_item("int_literals", PyList::new(py, &empty_ints)?)?;
+        set_empty_result_keys(py, &dict)?;
         return Ok(dict.into());
     }
 
@@ -66,6 +78,7 @@ fn parse_expression(py: Python<'_>, expr: &str, phase: Option<&str>) -> PyResult
         Err(e) => {
             let dict = PyDict::new(py);
             dict.set_item("error", format!("{e}"))?;
+            set_empty_result_keys(py, &dict)?;
             return Ok(dict.into());
         }
     };
