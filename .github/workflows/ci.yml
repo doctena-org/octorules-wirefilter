@@ -44,3 +44,14 @@ jobs:
       - run: pip install ruff
       - run: ruff check tests/
       - run: ruff format --check tests/
+
+  yamllint:
+    name: YAML lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install yamllint
+      - run: yamllint --no-warnings .github/workflows/*.yml

@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- `parse_expression()` docstring clarifies that the `phase` parameter is
+  accepted for forward compatibility but currently ignored.
+- CI: added `yamllint` job for `.github/workflows/*.yml` files.
+
 ## [0.3.2] - 2026-03-07
 
 ### Fixed

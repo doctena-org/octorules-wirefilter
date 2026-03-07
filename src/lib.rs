@@ -36,9 +36,10 @@ fn set_empty_result_keys(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<(
 
 /// Parse a Cloudflare wirefilter expression and return extracted components.
 ///
-/// The optional `phase` parameter is accepted for API compatibility but
-/// currently unused — all expressions are parsed against the single scheme
-/// where `http.request.uri.path` is a regular field.
+/// The `phase` parameter is accepted for forward compatibility but currently
+/// ignored.  All expressions are validated against a single unified scheme
+/// that covers all known Cloudflare fields.  A future version may use `phase`
+/// to restrict the field set per ruleset phase.
 ///
 /// Returns a Python dict with:
 ///   - On success: `{"fields": [...], "functions": [...], "operators": [...], ...}`
