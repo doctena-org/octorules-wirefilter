@@ -2,12 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.3.3] - 2026-03-14
 
 ### Changed
 - `parse_expression()` docstring clarifies that the `phase` parameter is
   accepted for forward compatibility but currently ignored.
 - CI: added `yamllint` job for `.github/workflows/*.yml` files.
+- `RESULT_KEYS` now includes `int_literals` — eliminates the manual
+  `set_item` call that was separate from the loop.
+- `pyproject.toml`: added Python 3.10–3.14 version classifiers to match
+  CI matrix and `requires-python`.
 
 ## [0.3.2] - 2026-03-07
 

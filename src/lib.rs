@@ -23,6 +23,7 @@ const RESULT_KEYS: &[&str] = &[
     "string_literals",
     "regex_literals",
     "ip_literals",
+    "int_literals",
 ];
 
 /// Populate a Python dict with empty lists for all standard result keys.
@@ -30,7 +31,6 @@ fn set_empty_result_keys(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<(
     for key in RESULT_KEYS {
         dict.set_item(*key, PyList::empty(py))?;
     }
-    dict.set_item("int_literals", PyList::empty(py))?;
     Ok(())
 }
 
