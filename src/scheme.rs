@@ -1205,4 +1205,44 @@ mod tests {
         let result = SCHEME.parse(r#"http.host eq "example.com""#);
         assert!(result.is_ok(), "parse failed: {:?}", result.err());
     }
+
+    // ── Sync checks: COMMON_*_NAMES match registered scheme ──
+
+    #[test]
+    fn all_common_fields_exist_in_scheme() {
+        for name in COMMON_FIELD_NAMES {
+            assert!(
+                SCHEME.get_field(name).is_ok(),
+                "COMMON_FIELD_NAMES contains {name:?} but it's not registered in SCHEME"
+            );
+        }
+    }
+
+    #[test]
+    fn all_common_functions_exist_in_scheme() {
+        for name in COMMON_FUNCTION_NAMES {
+            assert!(
+                SCHEME.get_function(name).is_ok(),
+                "COMMON_FUNCTION_NAMES contains {name:?} but it's not registered in SCHEME"
+            );
+        }
+    }
+
+    // ── type_to_python covers all registered fields ──
+
+    #[test]
+    fn common_field_defs_covers_all_common_fields() {
+        let defs = common_field_defs();
+        assert_eq!(
+            defs.len(),
+            COMMON_FIELD_NAMES.len(),
+            "common_field_defs() count doesn't match COMMON_FIELD_NAMES"
+        );
+        for &(name, py_type) in defs {
+            assert!(
+                !py_type.is_empty(),
+                "type_to_python returned empty for field {name:?}"
+            );
+        }
+    }
 }

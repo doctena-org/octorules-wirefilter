@@ -648,6 +648,46 @@ class TestInputLimits:
         assert "error" not in result, f"unexpected error: {result.get('error')}"
         assert "" in result["string_literals"]
 
+    def test_exact_size_limit_accepted(self):
+        """Expression at exactly 1 MiB is accepted (not rejected by size check)."""
+        limit = 1_048_576
+        prefix = 'http.host eq "'
+        suffix = '"'
+        padding = limit - len(prefix) - len(suffix)
+        expr = prefix + "a" * padding + suffix
+        assert len(expr) == limit
+        result = parse_expression(expr)
+        assert "error" not in result, f"unexpected error: {result.get('error')}"
+        assert "fields" in result
+
+    def test_one_byte_over_limit_rejected(self):
+        """Expression at 1 MiB + 1 is rejected."""
+        limit = 1_048_576
+        expr = "a" * (limit + 1)
+        result = parse_expression(expr)
+        assert "error" in result
+        assert "maximum length" in result["error"]
+        assert str(limit + 1) in result["error"]
+        # Error responses still include standard keys with empty lists
+        assert result["fields"] == []
+        assert result["int_literals"] == []
+
+    def test_depth_exceeded_flag_on_deep_logical_nesting(self):
+        """Deeply nested logical expression triggers depth_exceeded flag."""
+        depth = 150
+        expr = "(" * depth + "ssl" + ")" * depth
+        result = parse_expression(expr)
+        assert "error" not in result, f"unexpected error: {result.get('error')}"
+        assert result.get("depth_exceeded") is True
+
+    def test_depth_not_exceeded_at_shallow_nesting(self):
+        """Shallow nesting (10 levels) does NOT set depth_exceeded."""
+        depth = 10
+        expr = "(" * depth + "ssl" + ")" * depth
+        result = parse_expression(expr)
+        assert "error" not in result, f"unexpected error: {result.get('error')}"
+        assert result.get("depth_exceeded") is not True
+
 
 class TestPhaseEdgeCases:
     """Edge case tests for the phase parameter."""
