@@ -10,36 +10,49 @@ permissions:
   contents: write
 
 jobs:
-  ci:
-    uses: ./.github/workflows/ci.yml
+  lint:
+    uses: ./.github/workflows/lint.yaml
+
+  test:
+    uses: ./.github/workflows/test.yaml
 
   build-wheels-linux:
-    name: Build wheel (Linux ${{ matrix.target }})
-    needs: [ci]
+    name: Build wheel (Linux ${{ matrix.manylinux }} ${{ matrix.target }})
+    needs: [lint, test]
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     strategy:
       matrix:
         include:
           - target: x86_64
             runner: ubuntu-latest
+            manylinux: auto
           - target: aarch64
             runner: ubuntu-latest
+            manylinux: auto
+          - target: x86_64
+            runner: ubuntu-latest
+            manylinux: musllinux_1_2
+          - target: aarch64
+            runner: ubuntu-latest
+            manylinux: musllinux_1_2
     steps:
       - uses: actions/checkout@v6
       - uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad  # v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
-          manylinux: auto
+          manylinux: ${{ matrix.manylinux }}
       - uses: actions/upload-artifact@v6
         with:
-          name: wheels-linux-${{ matrix.target }}
+          name: wheels-linux-${{ matrix.manylinux }}-${{ matrix.target }}
           path: dist/*.whl
 
   build-wheels-macos:
     name: Build wheel (macOS ${{ matrix.target }})
-    needs: [ci]
+    needs: [lint, test]
     runs-on: macos-latest
+    timeout-minutes: 30
     strategy:
       matrix:
         target: [x86_64, aarch64]
@@ -64,8 +77,9 @@ jobs:
 
   build-wheels-windows:
     name: Build wheel (Windows x86_64)
-    needs: [ci]
+    needs: [lint, test]
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -87,8 +101,9 @@ jobs:
 
   build-sdist:
     name: Build sdist
-    needs: [ci]
+    needs: [lint, test]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad  # v1
@@ -104,6 +119,7 @@ jobs:
     name: Publish to PyPI
     needs: [build-wheels-linux, build-wheels-macos, build-wheels-windows, build-sdist]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: pypi
     steps:
       - uses: actions/download-artifact@v6
@@ -118,6 +134,7 @@ jobs:
     name: Create GitHub Release
     needs: [publish]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v6

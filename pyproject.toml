@@ -16,6 +16,8 @@ authors = [
 keywords = ["cloudflare", "wirefilter", "parser", "ffi"]
 classifiers = [
     "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -23,11 +25,17 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Rust",
+    "Topic :: System :: Networking :: Firewalls",
+    "Topic :: System :: Systems Administration",
 ]
 
 [project.urls]
+Homepage = "https://github.com/doctena-org/octorules-wirefilter"
 Repository = "https://github.com/doctena-org/octorules-wirefilter"
 Issues = "https://github.com/doctena-org/octorules-wirefilter/issues"
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "yamllint"]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
