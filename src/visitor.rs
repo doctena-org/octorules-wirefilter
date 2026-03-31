@@ -15,14 +15,15 @@ use wirefilter::{
 /// Maximum nesting depth before the extractor stops descending.
 const MAX_NESTING_DEPTH: usize = 100;
 
-/// Generate a dedup-add method that uses `HashSet::insert()` to avoid the
-/// `contains` + `insert` double-lookup, and allocates once (for the set)
-/// then clones (for the vec) per unique entry.
+/// Generate a dedup-add method that skips duplicates with zero allocations
+/// (via `HashSet::contains(&str)` on a `HashSet<String>`), and allocates
+/// once per unique entry (for the set) then clones (for the vec).
 macro_rules! dedup_add {
     ($method:ident, $seen:ident, $list:ident) => {
         fn $method(&mut self, value: &str) {
-            let owned = value.to_owned();
-            if self.$seen.insert(owned.clone()) {
+            if !self.$seen.contains(value) {
+                let owned = value.to_owned();
+                self.$seen.insert(owned.clone());
                 self.$list.push(owned);
             }
         }
@@ -297,5 +298,313 @@ impl ExpressionExtractor {
     /// Entry point: walk the root LogicalExpr of a FilterAst.
     pub fn extract(&mut self, root: &LogicalExpr) {
         self.walk_logical(root);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scheme::SCHEME;
+    use std::sync::LazyLock;
+    use wirefilter::{AlwaysList, Scheme, SchemeBuilder, Type};
+
+    /// Helper: parse an expression against the production SCHEME and extract.
+    fn extract_expr(expr: &str) -> ExpressionExtractor {
+        let ast = SCHEME.parse(expr).expect("parse failed");
+        let mut ex = ExpressionExtractor::new();
+        ex.extract(ast.expression());
+        ex
+    }
+
+    /// A minimal scheme with an Int list registered so `in $list_name`
+    /// syntax can be parsed.
+    static LIST_SCHEME: LazyLock<Scheme> = LazyLock::new(|| {
+        let mut b = SchemeBuilder::new();
+        b.add_field("ip.src", Type::Ip).unwrap();
+        b.add_field("http.host", Type::Bytes).unwrap();
+        b.add_field("cf.bot_management.score", Type::Int).unwrap();
+        b.add_list(Type::Int, AlwaysList {}).unwrap();
+        b.add_list(Type::Ip, AlwaysList {}).unwrap();
+        b.add_list(Type::Bytes, AlwaysList {}).unwrap();
+        b.build()
+    });
+
+    /// Helper: parse against the LIST_SCHEME and extract.
+    fn extract_list_expr(expr: &str) -> ExpressionExtractor {
+        let ast = LIST_SCHEME.parse(expr).expect("parse failed");
+        let mut ex = ExpressionExtractor::new();
+        ex.extract(ast.expression());
+        ex
+    }
+
+    // ── Deduplication ────────────────────────────────────────
+
+    #[test]
+    fn dedup_field_referenced_twice() {
+        let ex = extract_expr(r#"http.host eq "a.com" or http.host eq "b.com""#);
+        assert_eq!(ex.fields, vec!["http.host"]);
+    }
+
+    #[test]
+    fn dedup_operator_used_twice() {
+        let ex = extract_expr(r#"http.host eq "a.com" or http.host eq "b.com""#);
+        // "eq" should appear once, "or" should appear once
+        assert_eq!(ex.operators.iter().filter(|o| *o == "eq").count(), 1);
+        assert_eq!(ex.operators.iter().filter(|o| *o == "or").count(), 1);
+    }
+
+    #[test]
+    fn dedup_string_literal_used_twice() {
+        let ex = extract_expr(r#"http.host eq "same" or http.request.uri.path eq "same""#);
+        assert_eq!(
+            ex.string_literals.iter().filter(|s| *s == "same").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn dedup_int_literal_used_twice() {
+        let ex = extract_expr("cf.bot_management.score eq 30 or cf.threat_score eq 30");
+        assert_eq!(ex.int_literals.iter().filter(|&&v| v == 30).count(), 1);
+    }
+
+    #[test]
+    fn dedup_ip_literal_used_twice() {
+        let ex = extract_expr(r#"ip.src eq 1.2.3.4 or ip.src ne 1.2.3.4"#);
+        assert_eq!(ex.ip_literals.iter().filter(|s| *s == "1.2.3.4").count(), 1);
+    }
+
+    // ── Bool / Array / Map no-ops ────────────────────────────
+
+    #[test]
+    fn bool_field_truthiness_no_crash() {
+        // Bare bool field — IsTrue operator, no crash
+        let ex = extract_expr("ssl");
+        assert_eq!(ex.fields, vec!["ssl"]);
+        assert!(ex.operators.is_empty());
+        assert!(ex.string_literals.is_empty());
+    }
+
+    #[test]
+    fn bool_field_negated() {
+        let ex = extract_expr("not ssl");
+        assert_eq!(ex.fields, vec!["ssl"]);
+        assert!(ex.operators.contains(&"not".to_string()));
+    }
+
+    // ── InList ($list_name) ──────────────────────────────────
+
+    #[test]
+    fn in_list_extracts_in_operator() {
+        let ex = extract_list_expr("cf.bot_management.score in $my_list");
+        assert_eq!(ex.fields, vec!["cf.bot_management.score"]);
+        assert!(ex.operators.contains(&"in".to_string()));
+        // No literals should be extracted from a named list
+        assert!(ex.int_literals.is_empty());
+        assert!(ex.string_literals.is_empty());
+    }
+
+    #[test]
+    fn in_list_ip_extracts_in_operator() {
+        let ex = extract_list_expr("ip.src in $blocked_ips");
+        assert_eq!(ex.fields, vec!["ip.src"]);
+        assert!(ex.operators.contains(&"in".to_string()));
+        assert!(ex.ip_literals.is_empty());
+    }
+
+    // ── Explicit IP range extraction ─────────────────────────
+
+    #[test]
+    fn explicit_ip_v4_range_extracts_both_endpoints() {
+        let ex = extract_expr("ip.src in {10.0.0.1..10.0.0.5}");
+        assert!(ex.ip_literals.contains(&"10.0.0.1".to_string()));
+        assert!(ex.ip_literals.contains(&"10.0.0.5".to_string()));
+    }
+
+    #[test]
+    fn explicit_ip_v4_single_value_range() {
+        // A range where start == end should only produce one entry
+        let ex = extract_expr("ip.src in {10.0.0.1..10.0.0.1}");
+        assert_eq!(
+            ex.ip_literals.iter().filter(|s| *s == "10.0.0.1").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn cidr_ip_range_extracted() {
+        let ex = extract_expr("ip.src in {192.168.0.0/16}");
+        assert!(ex.ip_literals.contains(&"192.168.0.0/16".to_string()));
+    }
+
+    #[test]
+    fn single_ip_comparison() {
+        let ex = extract_expr("ip.src eq 10.0.0.1");
+        assert_eq!(ex.ip_literals, vec!["10.0.0.1"]);
+        assert_eq!(ex.fields, vec!["ip.src"]);
+    }
+
+    // ── ContainsOneOf (via `contains` on a set) ──────────────
+
+    // Note: ContainsOneOf cannot be constructed via the parser
+    // ("Node should not be constructed as there is no syntax to do so").
+    // We test the `contains` operator with a single value instead.
+    #[test]
+    fn contains_operator_extraction() {
+        let ex = extract_expr(r#"http.request.uri.path contains "admin""#);
+        assert!(ex.operators.contains(&"contains".to_string()));
+        assert!(ex.string_literals.contains(&"admin".to_string()));
+    }
+
+    // ── Ordering operators ───────────────────────────────────
+
+    #[test]
+    fn all_ordering_ops_extracted() {
+        let ex = extract_expr(
+            "cf.bot_management.score gt 10 and \
+             cf.bot_management.score ge 20 and \
+             cf.bot_management.score lt 30 and \
+             cf.bot_management.score le 40 and \
+             cf.bot_management.score eq 50 and \
+             cf.bot_management.score ne 60",
+        );
+        for op in &["gt", "ge", "lt", "le", "eq", "ne"] {
+            assert!(
+                ex.operators.contains(&op.to_string()),
+                "missing operator: {op}"
+            );
+        }
+        for val in &[10, 20, 30, 40, 50, 60] {
+            assert!(ex.int_literals.contains(val), "missing int literal: {val}");
+        }
+    }
+
+    // ── Regex extraction ─────────────────────────────────────
+
+    #[test]
+    fn regex_literal_extracted() {
+        let ex = extract_expr(r#"http.request.uri.path matches "^/api/v[0-9]+""#);
+        assert!(ex.operators.contains(&"matches".to_string()));
+        assert_eq!(ex.regex_literals.len(), 1);
+        assert!(ex.regex_literals[0].contains("/api/v[0-9]+"));
+    }
+
+    // ── Wildcard extraction ──────────────────────────────────
+
+    #[test]
+    fn wildcard_operator_extracted() {
+        let ex = extract_expr(r#"http.request.uri.path wildcard "/api/*""#);
+        assert!(ex.operators.contains(&"wildcard".to_string()));
+        assert!(ex.string_literals.contains(&"/api/*".to_string()));
+    }
+
+    // ── OneOf (in set) extraction ────────────────────────────
+
+    #[test]
+    fn one_of_bytes_extraction() {
+        let ex = extract_expr(r#"http.host in {"a.com" "b.com" "c.com"}"#);
+        assert!(ex.operators.contains(&"in".to_string()));
+        assert_eq!(ex.string_literals.len(), 3);
+    }
+
+    #[test]
+    fn one_of_ip_extraction() {
+        let ex = extract_expr("ip.src in {1.2.3.4 5.6.7.8}");
+        assert!(ex.operators.contains(&"in".to_string()));
+        assert_eq!(ex.ip_literals.len(), 2);
+    }
+
+    #[test]
+    fn one_of_int_extraction() {
+        let ex = extract_expr("cf.bot_management.score in {10 20 30}");
+        assert!(ex.operators.contains(&"in".to_string()));
+        assert_eq!(ex.int_literals, vec![10, 20, 30]);
+    }
+
+    // ── Function extraction ──────────────────────────────────
+
+    #[test]
+    fn function_call_extracted() {
+        let ex = extract_expr(r#"lower(http.host) eq "example.com""#);
+        assert!(ex.functions.contains(&"lower".to_string()));
+        assert!(ex.fields.contains(&"http.host".to_string()));
+        assert!(ex.string_literals.contains(&"example.com".to_string()));
+    }
+
+    // ── Logical operators ────────────────────────────────────
+
+    #[test]
+    fn and_or_not_operators() {
+        let ex = extract_expr(r#"(http.host eq "a.com" and not ssl) or http.host eq "b.com""#);
+        assert!(ex.operators.contains(&"and".to_string()));
+        assert!(ex.operators.contains(&"or".to_string()));
+        assert!(ex.operators.contains(&"not".to_string()));
+    }
+
+    #[test]
+    fn xor_operator() {
+        let ex = extract_expr(r#"http.host eq "a.com" xor http.host eq "b.com""#);
+        assert!(ex.operators.contains(&"xor".to_string()));
+    }
+
+    // ── Depth guard ──────────────────────────────────────────
+
+    #[test]
+    fn depth_not_exceeded_for_simple_expr() {
+        let ex = extract_expr(r#"http.host eq "example.com""#);
+        assert!(!ex.depth_exceeded());
+    }
+
+    #[test]
+    fn depth_not_exceeded_for_moderate_nesting() {
+        // 10 levels of nesting via parentheses — well within limit
+        let mut expr = String::from(r#"http.host eq "example.com""#);
+        for _ in 0..10 {
+            expr = format!("({expr})");
+        }
+        let ex = extract_expr(&expr);
+        assert!(!ex.depth_exceeded());
+        assert_eq!(ex.fields, vec!["http.host"]);
+    }
+
+    // ── Int range extraction ─────────────────────────────────
+
+    #[test]
+    fn int_range_both_endpoints() {
+        let ex = extract_expr("cf.bot_management.score in {10..20}");
+        assert!(ex.int_literals.contains(&10));
+        assert!(ex.int_literals.contains(&20));
+    }
+
+    #[test]
+    fn int_range_single_value() {
+        let ex = extract_expr("cf.bot_management.score in {42..42}");
+        // Should only have one entry for equal endpoints
+        assert_eq!(ex.int_literals.iter().filter(|&&v| v == 42).count(), 1);
+    }
+
+    // ── Bitwise AND operator ─────────────────────────────────
+
+    #[test]
+    fn bitwise_and_operator() {
+        // bitwise_and is a comparison-level op: `field & int` evaluates to bool
+        let ex = extract_expr("cf.bot_management.score & 255");
+        assert!(ex.operators.contains(&"bitwise_and".to_string()));
+        assert!(ex.int_literals.contains(&255));
+    }
+
+    // ── Empty / new extractor ────────────────────────────────
+
+    #[test]
+    fn new_extractor_is_empty() {
+        let ex = ExpressionExtractor::new();
+        assert!(ex.fields.is_empty());
+        assert!(ex.functions.is_empty());
+        assert!(ex.operators.is_empty());
+        assert!(ex.string_literals.is_empty());
+        assert!(ex.regex_literals.is_empty());
+        assert!(ex.ip_literals.is_empty());
+        assert!(ex.int_literals.is_empty());
+        assert!(!ex.depth_exceeded());
     }
 }

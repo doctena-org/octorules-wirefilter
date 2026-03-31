@@ -1,0 +1,3 @@
+# Vendored crate sources must be stored verbatim — Cargo verifies checksums.
+# Line-ending conversion (LF → CRLF on Windows) would break builds.
+vendor/** -text

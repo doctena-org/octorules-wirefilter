@@ -5,7 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.4] - 2026-03-31
+
+### Fixed
+- `dedup_add!` macro now truly performs zero allocations for duplicate values
+  (was incorrectly claiming this since v0.3.1 but still allocating on every call).
+
+### Changed
+- All dependencies vendored into `vendor/` to eliminate runtime dependency on
+  remote git repositories.
+
+### Added
+- 29 Rust unit tests for `ExpressionExtractor` covering deduplication, boolean
+  fields, named lists (`$list_name`), IP ranges, operators, functions, logical
+  operators, and depth guards.
 
 ## [0.3.3] - 2026-03-14
 
