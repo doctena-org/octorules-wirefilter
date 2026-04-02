@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Pre-commit hook: Rust fmt + clippy, Python lint + format check.
+#
+# Install: from the repo root, run:
+#   ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
+set -euo pipefail
+
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+.venv/bin/ruff check tests/
+.venv/bin/ruff format --check tests/

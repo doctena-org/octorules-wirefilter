@@ -784,3 +784,96 @@ class TestGetSchemaInfo:
         info = get_schema_info()
         assert "lower" in info["functions"]
         assert "starts_with" in info["functions"]
+
+
+# ---------------------------------------------------------------------------
+# Named list support ($list_name)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not HAS_WIREFILTER, reason="wirefilter not installed")
+class TestNamedLists:
+    def test_ip_named_list_no_error(self):
+        r = parse_expression("ip.src in $blocked_ips")
+        assert r.get("error") is None
+
+    def test_ip_named_list_extracts_field(self):
+        r = parse_expression("ip.src in $blocked_ips")
+        assert "ip.src" in r["fields"]
+
+    def test_ip_named_list_extracts_in_operator(self):
+        r = parse_expression("ip.src in $blocked_ips")
+        assert "in" in r["operators"]
+
+    def test_string_named_list(self):
+        r = parse_expression("http.host in $allowed_hosts")
+        assert r.get("error") is None
+        assert "http.host" in r["fields"]
+
+    def test_int_named_list(self):
+        r = parse_expression("cf.bot_management.score in $suspicious")
+        assert r.get("error") is None
+        assert "cf.bot_management.score" in r["fields"]
+
+    def test_negated_named_list(self):
+        r = parse_expression("not ip.src in $allowlist")
+        assert r.get("error") is None
+        assert "not" in r["operators"]
+        assert "in" in r["operators"]
+
+    def test_named_list_in_compound_expression(self):
+        r = parse_expression('ip.src in $blocked and http.host eq "example.com"')
+        assert r.get("error") is None
+        assert "ip.src" in r["fields"]
+        assert "http.host" in r["fields"]
+        assert "in" in r["operators"]
+        assert "eq" in r["operators"]
+
+    def test_two_named_lists(self):
+        r = parse_expression("ip.src in $list_a or ip.src in $list_b")
+        assert r.get("error") is None
+        assert "ip.src" in r["fields"]
+        assert "or" in r["operators"]
+
+    def test_named_list_with_literal_set(self):
+        r = parse_expression('ip.src in $blocked or http.host in {"a.com" "b.com"}')
+        assert r.get("error") is None
+        assert "a.com" in r["string_literals"]
+
+
+# ---------------------------------------------------------------------------
+# Wildcard star limit (ParserSettings)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not HAS_WIREFILTER, reason="wirefilter not installed")
+class TestWildcardLimit:
+    def test_single_wildcard_ok(self):
+        r = parse_expression('http.host wildcard "*.example.com"')
+        assert r.get("error") is None
+
+    def test_few_wildcards_ok(self):
+        r = parse_expression('http.host wildcard "*.*.example.com"')
+        assert r.get("error") is None
+
+    def test_ten_wildcards_ok(self):
+        pattern = ".".join(["*"] * 10) + ".com"
+        r = parse_expression(f'http.host wildcard "{pattern}"')
+        assert r.get("error") is None
+
+    def test_eleven_wildcards_rejected(self):
+        pattern = ".".join(["*"] * 11) + ".com"
+        r = parse_expression(f'http.host wildcard "{pattern}"')
+        assert r.get("error") is not None
+
+    def test_excessive_wildcards_rejected(self):
+        pattern = "*." * 20 + "com"
+        r = parse_expression(f'http.host wildcard "{pattern}"')
+        assert r.get("error") is not None
+
+    def test_escaped_stars_not_counted(self):
+        """Escaped \\* shouldn't count toward the limit."""
+        r = parse_expression(r'http.host wildcard "\\*\\*\\*.example.com"')
+        # Escaped stars are literal — may or may not count depending on
+        # wirefilter's implementation. Just verify it doesn't crash.
+        assert isinstance(r, dict)

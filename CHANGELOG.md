@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.5] - 2026-04-02
+
+### Added
+- Named list support in the production scheme — expressions like
+  ``ip.src in $my_list`` now parse without error.  ``AlwaysList`` is
+  registered for Int, Ip, and Bytes types so wirefilter accepts any
+  ``$name`` reference.  Actual list validation (existence, type
+  compatibility) is handled by the Python linter (CF102/CF104).
+- ``ParserSettings`` with ``wildcard_star_limit: 10`` to catch excessive
+  wildcard metacharacters at lint time.
+
+### Changed
+- Dev dependencies pinned to minimum versions (`pytest>=7.0`, `ruff>=0.4.0`,
+  `yamllint>=1.35.0`) for reproducible builds.
+- Added `per-file-ignores` for test files (`RUF043`).
+- Added pre-commit hook (`cargo fmt`, `cargo clippy`, `ruff check/format`).
+
 ## [0.3.4] - 2026-03-31
 
 ### Fixed

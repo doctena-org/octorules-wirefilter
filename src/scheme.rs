@@ -16,7 +16,7 @@
 use std::sync::LazyLock;
 
 use wirefilter::{
-    AllFunction, AnyFunction, ConcatFunction, FunctionArgs, GetType, LhsValue, Scheme,
+    AllFunction, AlwaysList, AnyFunction, ConcatFunction, FunctionArgs, GetType, LhsValue, Scheme,
     SchemeBuilder, SimpleFunctionArgKind, SimpleFunctionDefinition, SimpleFunctionImpl,
     SimpleFunctionOptParam, SimpleFunctionParam, Type,
 };
@@ -100,6 +100,15 @@ pub static SCHEME: LazyLock<Scheme> = LazyLock::new(|| {
     register_common_fields(&mut b);
     b.add_field("http.request.uri.path", Type::Bytes).unwrap();
     register_common_functions(&mut b);
+
+    // Register named list support for all value types so expressions
+    // like `ip.src in $my_list` parse without error.  AlwaysList accepts
+    // any list name — actual list validation is done by the Python linter
+    // (CF102 checks existence, CF104 checks type compatibility).
+    b.add_list(Type::Int, AlwaysList {}).unwrap();
+    b.add_list(Type::Ip, AlwaysList {}).unwrap();
+    b.add_list(Type::Bytes, AlwaysList {}).unwrap();
+
     b.build()
 });
 
@@ -1244,5 +1253,65 @@ mod tests {
                 "type_to_python returned empty for field {name:?}"
             );
         }
+    }
+
+    // ── Named list support ──
+
+    #[test]
+    fn scheme_parses_ip_named_list() {
+        let ast = SCHEME
+            .parse("ip.src in $blocked_ips")
+            .expect("should parse ip named list");
+        let _ = ast; // Parsing succeeded — type check passed
+    }
+
+    #[test]
+    fn scheme_parses_string_named_list() {
+        let ast = SCHEME
+            .parse("http.host in $allowed_hosts")
+            .expect("should parse string named list");
+        let _ = ast;
+    }
+
+    #[test]
+    fn scheme_parses_int_named_list() {
+        let ast = SCHEME
+            .parse("cf.bot_management.score in $suspicious_scores")
+            .expect("should parse int named list");
+        let _ = ast;
+    }
+
+    #[test]
+    fn scheme_parses_negated_named_list() {
+        let ast = SCHEME
+            .parse("not ip.src in $allowlist")
+            .expect("should parse negated named list");
+        let _ = ast;
+    }
+
+    #[test]
+    fn scheme_parses_named_list_in_compound_expr() {
+        let ast = SCHEME
+            .parse("ip.src in $blocked and http.host eq \"example.com\"")
+            .expect("should parse compound expr with named list");
+        let _ = ast;
+    }
+
+    // ── Wildcard star limit (ParserSettings) ──
+
+    #[test]
+    fn wildcard_ten_stars_accepted() {
+        use crate::parser_settings;
+        let pattern = format!("http.host wildcard \"{}\"", "*.".repeat(10) + "com");
+        let parser = SCHEME.parser_with_settings(parser_settings());
+        assert!(parser.parse(&pattern).is_ok());
+    }
+
+    #[test]
+    fn wildcard_eleven_stars_rejected() {
+        use crate::parser_settings;
+        let pattern = format!("http.host wildcard \"{}\"", "*.".repeat(11) + "com");
+        let parser = SCHEME.parser_with_settings(parser_settings());
+        assert!(parser.parse(&pattern).is_err());
     }
 }

@@ -35,7 +35,7 @@ Repository = "https://github.com/doctena-org/octorules-wirefilter"
 Issues = "https://github.com/doctena-org/octorules-wirefilter/issues"
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff", "yamllint"]
+dev = ["pytest>=7.0", "ruff>=0.4.0", "yamllint>=1.35.0"]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
@@ -46,6 +46,10 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests use regex metacharacters in match= patterns.
+"tests/*" = ["RUF043"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -5,6 +5,7 @@
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+use wirefilter::ParserSettings;
 
 mod scheme;
 mod visitor;
@@ -14,6 +15,18 @@ use visitor::ExpressionExtractor;
 
 /// Maximum allowed expression length (1 MiB).
 const MAX_EXPRESSION_LEN: usize = 1_048_576;
+
+/// Conservative parser settings to catch likely-rejected expressions early.
+///
+/// - `wildcard_star_limit`: 10 — prevents excessive `*` metacharacters that
+///   would cause catastrophic backtracking at evaluation time.
+/// - Regex size limits: wirefilter defaults (10 MB DFA, 2 MB compiled).
+pub(crate) fn parser_settings() -> ParserSettings {
+    ParserSettings {
+        wildcard_star_limit: 10,
+        ..ParserSettings::default()
+    }
+}
 
 /// Standard result keys returned by `parse_expression`.
 const RESULT_KEYS: &[&str] = &[
@@ -74,7 +87,10 @@ fn parse_expression(py: Python<'_>, expr: &str, phase: Option<&str>) -> PyResult
     }
 
     let _ = phase; // accepted for API compat, unused
-    let ast = match SCHEME.parse(trimmed) {
+    let ast = match SCHEME
+        .parser_with_settings(parser_settings())
+        .parse(trimmed)
+    {
         Ok(ast) => ast,
         Err(e) => {
             let dict = PyDict::new(py);
