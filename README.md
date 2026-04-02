@@ -39,6 +39,12 @@ expression_bridge.py          Python-side routing layer
 A single wirefilter scheme is built at startup and cached:
 
 - **173 fields** (including `http.request.uri.path`), **34 functions**.
+- **Named list support** — expressions like `ip.src in $my_list` parse
+  without error. `AlwaysList` is registered for Int, Ip, and Bytes types
+  so any `$name` reference is accepted. Actual list validation (existence,
+  type compatibility) is handled by the Python linter (CF102/CF104).
+- **Wildcard limit** — `ParserSettings` enforces a maximum of 10 `*`
+  metacharacters per wildcard pattern to prevent catastrophic backtracking.
 
 The `phase` parameter is accepted for API compatibility but currently unused — all expressions are parsed against the same scheme. Transform-phase function-call syntax (where `http.request.uri.path` is callable) is handled on the Python side.
 
