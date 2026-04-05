@@ -8,7 +8,4 @@ updates:
     directory: /
     schedule:
       interval: weekly
-  - package-ecosystem: cargo
-    directory: /
-    schedule:
-      interval: weekly
+  # cargo ecosystem is omitted — all Rust deps are vendored in vendor/
