@@ -1,3 +1,4 @@
+---
 name: Release
 
 on:
@@ -145,4 +146,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "${TAG}" dist/* --generate-notes
+        run: |
+          if gh release view "${TAG}" > /dev/null 2>&1; then
+            echo "Release ${TAG} already exists, uploading assets"
+            gh release upload "${TAG}" dist/* --clobber
+          else
+            gh release create "${TAG}" dist/* --generate-notes
+          fi
