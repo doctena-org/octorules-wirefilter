@@ -42,7 +42,7 @@ A single wirefilter scheme is built at startup and cached:
 - **Named list support** — expressions like `ip.src in $my_list` parse
   without error. `AlwaysList` is registered for Int, Ip, and Bytes types
   so any `$name` reference is accepted. Actual list validation (existence,
-  type compatibility) is handled by the Python linter (CF102/CF104).
+  type compatibility) is handled by the Python linter ([CF102](https://github.com/doctena-org/octorules-cloudflare/blob/main/docs/lint/README.md): unresolved list reference, [CF104](https://github.com/doctena-org/octorules-cloudflare/blob/main/docs/lint/README.md): field type incompatible with list kind).
 - **Wildcard limit** — `ParserSettings` enforces a maximum of 10 `*`
   metacharacters per wildcard pattern to prevent catastrophic backtracking.
 
@@ -52,7 +52,7 @@ The `phase` parameter is accepted for API compatibility but currently unused —
 
 ### Prerequisites
 
-- Rust toolchain **>= 1.86** (stable, via [rustup](https://rustup.rs/))
+- Rust toolchain **>= 1.86**, edition 2024 (stable, via [rustup](https://rustup.rs/))
 - Python >= 3.10 with venv
 - [maturin](https://github.com/PyO3/maturin) (`pip install maturin`)
 
@@ -97,7 +97,8 @@ from octorules_wirefilter import parse_expression
 result = parse_expression('http.host eq "example.com"')
 # {'fields': ['http.host'], 'operators': ['eq'], 'string_literals': ['example.com'], ...}
 
-# Parse with phase-aware scheme selection
+# Phase parameter is accepted for forward compatibility but currently unused —
+# all expressions parse against the same scheme regardless of phase value.
 result = parse_expression('lower(http.host) eq "test"', phase="url_rewrite_rules")
 
 # Parse errors return an error key
@@ -126,19 +127,19 @@ Returns schema metadata for automated synchronization with the Python linter sch
 
 ## Contributing
 
-**Important:** Field and function registries exist in two places: `src/scheme.rs` (Rust — used by wirefilter for parsing and type checking) and `src/octorules/linter/schemas/` in the octorules repo (Python — used by the regex fallback parser and lint rules). A `sync_schemas.py` script in the octorules repo regenerates the Python schemas from wirefilter's `get_schema_info()` function, but Rust-side changes must still be made manually.
+**Important:** Field and function registries exist in two places: `src/scheme.rs` (Rust — used by wirefilter for parsing and type checking) and `octorules_cloudflare/linter/schemas/` in the [octorules-cloudflare](https://github.com/doctena-org/octorules-cloudflare) repo (Python — used by the regex fallback parser and lint rules). A pre-commit hook in octorules-cloudflare auto-regenerates `schemas.json` when `overlay.toml` or `pyproject.toml` is modified. Rust-side changes here must still be made manually.
 
 ### Adding fields
 
 When Cloudflare adds new fields, update `src/scheme.rs` — add the field to `register_common_fields()` **and** to the `COMMON_FIELD_NAMES` array.
 
-Then run `python scripts/sync_schemas.py` in the octorules repo to regenerate the Python schemas. If the field needs Python-only metadata (`requires_plan`, `is_response`), add it to `overlay.toml` first.
+Then in the [octorules-cloudflare](https://github.com/doctena-org/octorules-cloudflare) repo, run `python scripts/sync_schemas.py` to regenerate `schemas.json`. If the field needs Python-only metadata (`requires_plan`, `is_response`), add it to `overlay.toml` in that repo first.
 
 ### Adding functions
 
 Update `src/scheme.rs` — register in `register_common_functions()` and add the name to the `COMMON_FUNCTION_NAMES` array.
 
-Then run `python scripts/sync_schemas.py` in the octorules repo. If the function needs `restricted_phases` or `requires_plan`, add it to `overlay.toml` first.
+Then in the [octorules-cloudflare](https://github.com/doctena-org/octorules-cloudflare) repo, run `python scripts/sync_schemas.py` to regenerate `schemas.json`. If the function needs `restricted_phases` or `requires_plan`, add it to `overlay.toml` in that repo first.
 
 ## Design decisions
 
@@ -149,4 +150,4 @@ Then run `python scripts/sync_schemas.py` in the octorules repo. If the function
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE).
+octorules-wirefilter is licensed under the [Apache License 2.0](LICENSE).
