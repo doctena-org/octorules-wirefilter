@@ -1,0 +1,17 @@
+# Graphify exclusions — same spirit as .gitignore but graphify-specific.
+# Only our own code should contribute to the graph.
+
+# Vendored upstream Rust dependencies (cargo vendor output).
+vendor/
+
+# Rust build artifacts.
+target/
+
+# Python build/venv/cache.
+.venv/
+__pycache__/
+*.egg-info/
+.ruff_cache/
+
+# Test fixtures/snapshots that aren't load-bearing for architecture.
+tests/snapshots/

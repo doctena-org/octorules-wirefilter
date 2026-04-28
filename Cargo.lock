@@ -135,7 +135,7 @@ dependencies = [
 
 [[package]]
 name = "octorules-wirefilter"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "pyo3",
  "wirefilter-engine",
