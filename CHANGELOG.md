@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-05-04
+
+### Added
+- 4 RFC 9440 mTLS Client-Cert fields: `cf.tls_client_auth.cert_chain_rfc9440`,
+  `cert_chain_rfc9440_too_large`, `cert_rfc9440`, `cert_rfc9440_too_large`.
+- `cf.edge.l4.delivery_rate`, `cf.timings.client_quic_rtt_msec`,
+  `cf.timings.worker_msec`, `cf.llm.prompt.custom_topic_categories`,
+  `cf.llm.prompt.token_count`.
+- JWT validation functions `is_jwt_valid(uuid)` and `is_jwt_present(uuid)`
+  (Cloudflare API Shield). The argument is a UUID literal, not a field —
+  passing a field is a parse error.
+- `regex_field_pairs` in the `parse_expression` result dict — `(field, regex)`
+  tuples for `matches` operators with a plain field LHS, alongside the existing
+  flat `regex_literals` list.
+
+### Removed
+- `http.request.jwt.claims.exp.sec`, `.sec.names`, `.sec.values` — Cloudflare
+  validates `exp` internally via `is_jwt_valid()` and doesn't expose it as a
+  queryable field.
+- `http.response.headers.truncated` — not in Cloudflare docs; only the
+  request-side variant exists.
+
+A regression test (`removed_speculative_fields_stay_removed`) prevents
+re-adding these by symmetry.
+
+### Changed
+- Field count: 173 → 178. Function count: 34 → 36.
+
 ## [0.3.6] - 2026-04-27
 
 ### Documentation

@@ -33,6 +33,7 @@ class TestParseExpression:
             "operators",
             "string_literals",
             "regex_literals",
+            "regex_field_pairs",
             "ip_literals",
             "int_literals",
         ):
@@ -46,6 +47,7 @@ class TestParseExpression:
             "operators",
             "string_literals",
             "regex_literals",
+            "regex_field_pairs",
             "ip_literals",
             "int_literals",
         ):
@@ -70,6 +72,7 @@ class TestParseExpression:
             "operators",
             "string_literals",
             "regex_literals",
+            "regex_field_pairs",
             "ip_literals",
             "int_literals",
         ):
@@ -109,123 +112,65 @@ class TestFieldExtraction:
 class TestFunctionExtraction:
     """Function call extraction."""
 
-    def test_lower(self):
-        result = parse_expression('lower(http.host) eq "example.com"')
-        assert "lower" in result["functions"]
-
-    def test_starts_with(self):
-        result = parse_expression('starts_with(http.request.uri.path, "/api/")')
-        assert "starts_with" in result["functions"]
+    @pytest.mark.parametrize(
+        "expr,fn",
+        [
+            ('lower(http.host) eq "example.com"', "lower"),
+            ('starts_with(http.request.uri.path, "/api/")', "starts_with"),
+            ('encode_base64(http.request.uri.path) eq "L2Fw"', "encode_base64"),
+            ('decode_base64(http.request.uri.path) eq "/api"', "decode_base64"),
+            ("cidr(ip.src, 24, 0) == 10.0.0.0", "cidr"),
+            ("cidr6(ip.src, 48) == 2001:db8::", "cidr6"),
+            ('join(http.request.headers.names, ",") eq "a,b"', "join"),
+            ('any(split(http.request.uri.path, "/", 3)[*] eq "api")', "split"),
+            ('has_key(http.request.headers, "x-api-key")', "has_key"),
+            ('upper(http.host) eq "EXAMPLE.COM"', "upper"),
+            ('url_decode(http.request.uri.path) eq "/hello world"', "url_decode"),
+            ('uuidv4(http.request.uri.path) eq "test"', "uuidv4"),
+            ('contains(http.host, "example")', "contains"),
+            ("len(http.host) gt 10", "len"),
+            ('substring(http.host, 0, 5) eq "examp"', "substring"),
+            (
+                'regex_replace(http.request.uri.path, "/old", "/new") eq "/new"',
+                "regex_replace",
+            ),
+            ('remove_bytes(http.host, "www.") eq "example.com"', "remove_bytes"),
+            ('to_string(cf.threat_score) eq "50"', "to_string"),
+            (
+                'lookup_json_string(http.request.body.raw, "key") eq "value"',
+                "lookup_json_string",
+            ),
+            (
+                'lookup_json_integer(http.request.body.raw, "count") gt 0',
+                "lookup_json_integer",
+            ),
+            ('sha256(http.request.body.raw) eq "abc"', "sha256"),
+            ('sha512(http.request.body.raw) eq "abc"', "sha512"),
+            ('hmac(http.request.uri.path, "secret", "sha256") eq "abc"', "hmac"),
+            ('ip_in_range(ip.src, "10.0.0.0/8")', "ip_in_range"),
+            ('has_value(http.request.headers.names, "x-api-key")', "has_value"),
+            ("bit_slice(http.request.body.raw, 0, 8) gt 0", "bit_slice"),
+            (
+                'wildcard_replace(http.host, "*.example.com", "${1}.cdn.com") eq "a.cdn.com"',
+                "wildcard_replace",
+            ),
+        ],
+    )
+    def test_function_name_extracted(self, expr, fn):
+        """Each documented Cloudflare function name is surfaced in ``functions``."""
+        result = parse_expression(expr)
+        assert fn in result["functions"]
 
     def test_nested_function_and_field(self):
+        """Functions and fields are extracted from the same expression."""
         result = parse_expression('lower(http.host) eq "a"')
         assert "lower" in result["functions"]
         assert "http.host" in result["fields"]
 
     def test_no_functions(self):
+        """Expressions with no function calls return an empty list."""
         result = parse_expression('http.host eq "example.com"')
         assert result["functions"] == []
-
-    def test_encode_base64(self):
-        result = parse_expression('encode_base64(http.request.uri.path) eq "L2Fw"')
-        assert "encode_base64" in result["functions"]
-
-    def test_decode_base64(self):
-        result = parse_expression('decode_base64(http.request.uri.path) eq "/api"')
-        assert "decode_base64" in result["functions"]
-
-    def test_cidr(self):
-        result = parse_expression("cidr(ip.src, 24, 0) == 10.0.0.0")
-        assert "cidr" in result["functions"]
-
-    def test_cidr6(self):
-        result = parse_expression("cidr6(ip.src, 48) == 2001:db8::")
-        assert "cidr6" in result["functions"]
-
-    def test_join(self):
-        result = parse_expression('join(http.request.headers.names, ",") eq "a,b"')
-        assert "join" in result["functions"]
-
-    def test_split(self):
-        result = parse_expression('any(split(http.request.uri.path, "/", 3)[*] eq "api")')
-        assert "split" in result["functions"]
-
-    def test_has_key(self):
-        result = parse_expression('has_key(http.request.headers, "x-api-key")')
-        assert "has_key" in result["functions"]
-
-    def test_upper(self):
-        result = parse_expression('upper(http.host) eq "EXAMPLE.COM"')
-        assert "upper" in result["functions"]
-
-    def test_url_decode(self):
-        result = parse_expression('url_decode(http.request.uri.path) eq "/hello world"')
-        assert "url_decode" in result["functions"]
-
-    def test_uuidv4(self):
-        result = parse_expression('uuidv4(http.request.uri.path) eq "test"')
-        assert "uuidv4" in result["functions"]
-
-    def test_contains_function(self):
-        result = parse_expression('contains(http.host, "example")')
-        assert "contains" in result["functions"]
-
-    def test_len(self):
-        result = parse_expression("len(http.host) gt 10")
-        assert "len" in result["functions"]
-
-    def test_substring(self):
-        result = parse_expression('substring(http.host, 0, 5) eq "examp"')
-        assert "substring" in result["functions"]
-
-    def test_regex_replace(self):
-        result = parse_expression('regex_replace(http.request.uri.path, "/old", "/new") eq "/new"')
-        assert "regex_replace" in result["functions"]
-
-    def test_remove_bytes(self):
-        result = parse_expression('remove_bytes(http.host, "www.") eq "example.com"')
-        assert "remove_bytes" in result["functions"]
-
-    def test_to_string(self):
-        result = parse_expression('to_string(cf.threat_score) eq "50"')
-        assert "to_string" in result["functions"]
-
-    def test_lookup_json_string(self):
-        result = parse_expression('lookup_json_string(http.request.body.raw, "key") eq "value"')
-        assert "lookup_json_string" in result["functions"]
-
-    def test_lookup_json_integer(self):
-        result = parse_expression('lookup_json_integer(http.request.body.raw, "count") gt 0')
-        assert "lookup_json_integer" in result["functions"]
-
-    def test_sha256(self):
-        result = parse_expression('sha256(http.request.body.raw) eq "abc"')
-        assert "sha256" in result["functions"]
-
-    def test_sha512(self):
-        result = parse_expression('sha512(http.request.body.raw) eq "abc"')
-        assert "sha512" in result["functions"]
-
-    def test_hmac(self):
-        result = parse_expression('hmac(http.request.uri.path, "secret", "sha256") eq "abc"')
-        assert "hmac" in result["functions"]
-
-    def test_ip_in_range(self):
-        result = parse_expression('ip_in_range(ip.src, "10.0.0.0/8")')
-        assert "ip_in_range" in result["functions"]
-
-    def test_has_value(self):
-        result = parse_expression('has_value(http.request.headers.names, "x-api-key")')
-        assert "has_value" in result["functions"]
-
-    def test_bit_slice(self):
-        result = parse_expression("bit_slice(http.request.body.raw, 0, 8) gt 0")
-        assert "bit_slice" in result["functions"]
-
-    def test_wildcard_replace(self):
-        expr = 'wildcard_replace(http.host, "*.example.com", "${1}.cdn.com") eq "a.cdn.com"'
-        result = parse_expression(expr)
-        assert "wildcard_replace" in result["functions"]
 
 
 class TestOperatorExtraction:
@@ -299,35 +244,31 @@ class TestOperatorExtraction:
 class TestLiteralExtraction:
     """String, regex, IP, and integer literal extraction."""
 
-    def test_string_literal(self):
-        result = parse_expression('http.host eq "example.com"')
-        assert "example.com" in result["string_literals"]
+    @pytest.mark.parametrize(
+        "expr,bucket,expected",
+        [
+            ('http.host eq "example.com"', "string_literals", "example.com"),
+            ('http.request.uri.path matches "^/api/.*"', "regex_literals", "^/api/.*"),
+            ("ip.src == 1.2.3.4", "ip_literals", "1.2.3.4"),
+            ("ip.src in {10.0.0.0/8}", "ip_literals", "10.0.0.0/8"),
+            ("cf.threat_score gt 50", "int_literals", 50),
+            (
+                'starts_with(http.request.uri.path, "/blog/")',
+                "string_literals",
+                "/blog/",
+            ),
+        ],
+    )
+    def test_literal_extracted(self, expr, bucket, expected):
+        """Each literal type lands in its dedicated bucket."""
+        result = parse_expression(expr)
+        assert expected in result[bucket]
 
-    def test_string_set(self):
+    def test_string_set_extracts_all(self):
+        """A set literal yields every member into ``string_literals``."""
         result = parse_expression('http.host in {"alpha" "beta" "gamma"}')
-        assert "alpha" in result["string_literals"]
-        assert "beta" in result["string_literals"]
-        assert "gamma" in result["string_literals"]
-
-    def test_regex_literal(self):
-        result = parse_expression('http.request.uri.path matches "^/api/.*"')
-        assert "^/api/.*" in result["regex_literals"]
-
-    def test_ip_literal(self):
-        result = parse_expression("ip.src == 1.2.3.4")
-        assert "1.2.3.4" in result["ip_literals"]
-
-    def test_ip_cidr(self):
-        result = parse_expression("ip.src in {10.0.0.0/8}")
-        assert "10.0.0.0/8" in result["ip_literals"]
-
-    def test_int_literal(self):
-        result = parse_expression("cf.threat_score gt 50")
-        assert 50 in result["int_literals"]
-
-    def test_function_string_arg(self):
-        result = parse_expression('starts_with(http.request.uri.path, "/blog/")')
-        assert "/blog/" in result["string_literals"]
+        for s in ("alpha", "beta", "gamma"):
+            assert s in result["string_literals"]
 
 
 class TestEmptyExpression:
@@ -544,6 +485,7 @@ class TestInputLimits:
             "operators",
             "string_literals",
             "regex_literals",
+            "regex_field_pairs",
             "ip_literals",
             "int_literals",
         ):
@@ -690,41 +632,21 @@ class TestInputLimits:
 
 
 class TestPhaseEdgeCases:
-    """Edge case tests for the phase parameter."""
+    """Edge case tests for the phase parameter (accepted for forward
+    compatibility but currently ignored — every input falls back to the
+    default scheme)."""
 
-    def test_misspelled_phase_falls_back_to_default(self):
-        """Misspelled phase name uses default scheme."""
-        result = parse_expression(
-            'http.request.uri.path eq "/test"',
-            phase="url_rewrite_rule",  # missing trailing 's'
-        )
-        assert "error" not in result
-        assert "http.request.uri.path" in result["fields"]
-
-    def test_empty_phase_string_falls_back(self):
-        """Empty string phase uses default scheme."""
-        result = parse_expression(
-            'http.request.uri.path eq "/test"',
-            phase="",
-        )
-        assert "error" not in result
-        assert "http.request.uri.path" in result["fields"]
-
-    def test_none_phase_is_default(self):
-        """Explicit None uses default scheme."""
-        result = parse_expression(
-            'http.request.uri.path eq "/test"',
-            phase=None,
-        )
-        assert "error" not in result
-        assert "http.request.uri.path" in result["fields"]
-
-    def test_uppercase_phase_falls_back(self):
-        """Uppercase phase name uses default scheme (case-sensitive)."""
-        result = parse_expression(
-            'http.request.uri.path eq "/test"',
-            phase="URL_REWRITE_RULES",
-        )
+    @pytest.mark.parametrize(
+        "phase",
+        [
+            None,  # explicit None
+            "",  # empty string
+            "url_rewrite_rule",  # misspelled (missing trailing 's')
+            "URL_REWRITE_RULES",  # wrong case
+        ],
+    )
+    def test_phase_falls_back_to_default(self, phase):
+        result = parse_expression('http.request.uri.path eq "/test"', phase=phase)
         assert "error" not in result
         assert "http.request.uri.path" in result["fields"]
 
@@ -736,20 +658,10 @@ class TestGetSchemaInfo:
         info = get_schema_info()
         assert isinstance(info, dict)
 
-    def test_has_required_keys(self):
-        info = get_schema_info()
-        for key in ("fields", "functions"):
-            assert key in info, f"missing key: {key}"
-
-    def test_fields_are_list_of_dicts(self):
-        info = get_schema_info()
-        assert isinstance(info["fields"], list)
-        assert len(info["fields"]) > 100
-        for entry in info["fields"]:
-            assert "name" in entry
-            assert "type" in entry
-
-    def test_field_types_are_valid(self):
+    def test_schema_shape(self):
+        """Single shape check: fields/functions present, fields are typed
+        dicts, every field type is one of the documented enum values, and
+        functions is a non-trivial list of strings."""
         valid_types = {
             "STRING",
             "INT",
@@ -758,21 +670,22 @@ class TestGetSchemaInfo:
             "ARRAY_STRING",
             "ARRAY_INT",
             "ARRAY_ARRAY_STRING",
+            "MAP_STRING_STRING",
+            "MAP_STRING_INT",
             "MAP_ARRAY_STRING",
             "MAP_ARRAY_INT",
         }
         info = get_schema_info()
+        for key in ("fields", "functions"):
+            assert key in info, f"missing key: {key}"
+        assert isinstance(info["fields"], list) and len(info["fields"]) > 100
         for entry in info["fields"]:
+            assert "name" in entry and "type" in entry
             assert entry["type"] in valid_types, (
                 f"field {entry['name']} has unexpected type {entry['type']}"
             )
-
-    def test_functions_are_list_of_strings(self):
-        info = get_schema_info()
-        assert isinstance(info["functions"], list)
-        assert len(info["functions"]) > 30
-        for name in info["functions"]:
-            assert isinstance(name, str)
+        assert isinstance(info["functions"], list) and len(info["functions"]) > 30
+        assert all(isinstance(name, str) for name in info["functions"])
 
     def test_known_field_present(self):
         info = get_schema_info()
@@ -787,22 +700,158 @@ class TestGetSchemaInfo:
 
 
 # ---------------------------------------------------------------------------
+# 2026 CF additions: RFC 9440 mTLS, L4/timings, LLM, JWT functions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not HAS_WIREFILTER, reason="wirefilter not installed")
+class TestRecentCFAdditions:
+    """Each recently-added Cloudflare field/function has a parse-level
+    test that fails fast if the registration is dropped from the scheme."""
+
+    def test_rfc9440_mtls_fields_parse(self):
+        """All four RFC 9440 mTLS Client-Cert fields parse cleanly.
+
+        Bytes fields use ``ne ""`` to test; bool fields are bare-truth
+        (the wirefilter idiom — ``bool_field eq true`` is not valid
+        syntax for bare bool fields).
+        """
+        for expr, expected in [
+            (
+                'cf.tls_client_auth.cert_chain_rfc9440 ne ""',
+                "cf.tls_client_auth.cert_chain_rfc9440",
+            ),
+            (
+                "cf.tls_client_auth.cert_chain_rfc9440_too_large",
+                "cf.tls_client_auth.cert_chain_rfc9440_too_large",
+            ),
+            ('cf.tls_client_auth.cert_rfc9440 ne ""', "cf.tls_client_auth.cert_rfc9440"),
+            (
+                "cf.tls_client_auth.cert_rfc9440_too_large",
+                "cf.tls_client_auth.cert_rfc9440_too_large",
+            ),
+        ]:
+            r = parse_expression(expr)
+            assert r.get("error") is None, f"{expr}: {r.get('error')}"
+            assert expected in r["fields"]
+
+    def test_l4_and_timings_fields_parse(self):
+        """2026-03 additions for L4 stats and timings."""
+        for expr, expected in [
+            ("cf.edge.l4.delivery_rate gt 1000", "cf.edge.l4.delivery_rate"),
+            ("cf.timings.client_quic_rtt_msec lt 100", "cf.timings.client_quic_rtt_msec"),
+            ("cf.timings.worker_msec gt 10", "cf.timings.worker_msec"),
+        ]:
+            r = parse_expression(expr)
+            assert r.get("error") is None, f"{expr}: {r.get('error')}"
+            assert expected in r["fields"]
+
+    def test_llm_2026_fields_parse(self):
+        """2026-03-11 AI prompt features."""
+        r = parse_expression("cf.llm.prompt.token_count gt 4000")
+        assert r.get("error") is None, r.get("error")
+        assert "cf.llm.prompt.token_count" in r["fields"]
+        # Map-typed field — index access is the documented use.
+        r = parse_expression('cf.llm.prompt.custom_topic_categories["competitors"] lt 30')
+        assert r.get("error") is None, r.get("error")
+        assert "cf.llm.prompt.custom_topic_categories" in r["fields"]
+
+    def test_jwt_validation_functions_take_literal_arg(self):
+        """``is_jwt_valid`` and ``is_jwt_present`` accept a UUID literal."""
+        # Documented usage from CF docs.
+        for fn in ["is_jwt_valid", "is_jwt_present"]:
+            r = parse_expression(f'{fn}("51231d16-01f1-48e3-93f8-91c99e81288e")')
+            assert r.get("error") is None, f"{fn}: {r.get('error')}"
+            assert fn in r["functions"]
+
+    def test_jwt_validation_function_rejects_field_arg(self):
+        """Passing a field where a literal is expected is a parse error."""
+        # Field arg should fail because the param is registered as Literal.
+        r = parse_expression('is_jwt_valid(http.request.headers["authorization"])')
+        assert r.get("error") is not None
+
+
+# ---------------------------------------------------------------------------
+# Speculative-addition regression guards
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not HAS_WIREFILTER, reason="wirefilter not installed")
+class TestSpeculativeRemovals:
+    """Four fields registered earlier by symmetry-pattern reasoning are
+    intentionally absent — Cloudflare doesn't expose them. Re-adding any
+    of them must be backed by current CF docs evidence, not symmetry.
+    See CHANGELOG for the per-field rationale."""
+
+    def test_jwt_exp_sec_no_longer_parses(self):
+        """``http.request.jwt.claims.exp.sec`` is intentionally absent;
+        CF doesn't expose ``exp`` as a queryable field (validates via
+        ``is_jwt_valid()`` internally)."""
+        for field in [
+            "http.request.jwt.claims.exp.sec",
+            "http.request.jwt.claims.exp.sec.names",
+            "http.request.jwt.claims.exp.sec.values",
+        ]:
+            r = parse_expression(f'{field} != ""')
+            assert r.get("error") is not None, f"{field} should be removed but parse succeeded"
+
+    def test_response_headers_truncated_no_longer_parses(self):
+        """``http.response.headers.truncated`` is intentionally absent;
+        CF docs don't expose a response-side variant of the truncation
+        indicator (only ``http.request.headers.truncated`` exists)."""
+        r = parse_expression("http.response.headers.truncated eq true")
+        assert r.get("error") is not None
+
+
+# ---------------------------------------------------------------------------
+# regex_field_pairs: field-context for regex literals
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not HAS_WIREFILTER, reason="wirefilter not installed")
+class TestRegexFieldPairs:
+    """The result dict carries ``regex_field_pairs`` — (field, regex)
+    tuples for `matches` operators against plain field LHS."""
+
+    def test_pair_recorded_for_plain_field_lhs(self):
+        r = parse_expression(r'http.host matches "api\.example\.com"')
+        pairs = r["regex_field_pairs"]
+        assert len(pairs) == 1
+        field, regex = pairs[0]
+        assert field == "http.host"
+        assert "api" in regex
+
+    def test_pair_skipped_for_function_call_lhs(self):
+        """``lower(http.host) matches "..."`` — function-call LHS;
+        field context is ambiguous after a transformation, so no pair."""
+        r = parse_expression(r'lower(http.host) matches "x"')
+        assert r["regex_field_pairs"] == []
+        # The flat regex_literals list still records the regex.
+        assert len(r["regex_literals"]) == 1
+
+    def test_pair_empty_for_non_matches_operator(self):
+        r = parse_expression('http.host eq "example.com"')
+        assert r["regex_field_pairs"] == []
+
+    def test_multiple_pairs_recorded(self):
+        r = parse_expression(r'http.host matches "a" or http.request.uri.path matches "b"')
+        fields = {f for f, _ in r["regex_field_pairs"]}
+        assert "http.host" in fields
+        assert "http.request.uri.path" in fields
+
+
+# ---------------------------------------------------------------------------
 # Named list support ($list_name)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(not HAS_WIREFILTER, reason="wirefilter not installed")
 class TestNamedLists:
-    def test_ip_named_list_no_error(self):
+    def test_ip_named_list_basic(self):
+        """``ip.src in $blocked_ips`` parses, extracts the field, and the operator."""
         r = parse_expression("ip.src in $blocked_ips")
         assert r.get("error") is None
-
-    def test_ip_named_list_extracts_field(self):
-        r = parse_expression("ip.src in $blocked_ips")
         assert "ip.src" in r["fields"]
-
-    def test_ip_named_list_extracts_in_operator(self):
-        r = parse_expression("ip.src in $blocked_ips")
         assert "in" in r["operators"]
 
     def test_string_named_list(self):
@@ -848,26 +897,15 @@ class TestNamedLists:
 
 @pytest.mark.skipif(not HAS_WIREFILTER, reason="wirefilter not installed")
 class TestWildcardLimit:
-    def test_single_wildcard_ok(self):
-        r = parse_expression('http.host wildcard "*.example.com"')
-        assert r.get("error") is None
-
-    def test_few_wildcards_ok(self):
-        r = parse_expression('http.host wildcard "*.*.example.com"')
-        assert r.get("error") is None
-
-    def test_ten_wildcards_ok(self):
+    def test_at_limit_accepted(self):
+        """Exactly 10 stars (the limit) parses without error."""
         pattern = ".".join(["*"] * 10) + ".com"
         r = parse_expression(f'http.host wildcard "{pattern}"')
         assert r.get("error") is None
 
-    def test_eleven_wildcards_rejected(self):
+    def test_one_over_limit_rejected(self):
+        """11 stars (one past the limit) is rejected."""
         pattern = ".".join(["*"] * 11) + ".com"
-        r = parse_expression(f'http.host wildcard "{pattern}"')
-        assert r.get("error") is not None
-
-    def test_excessive_wildcards_rejected(self):
-        pattern = "*." * 20 + "com"
         r = parse_expression(f'http.host wildcard "{pattern}"')
         assert r.get("error") is not None
 

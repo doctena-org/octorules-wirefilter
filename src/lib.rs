@@ -35,6 +35,7 @@ const RESULT_KEYS: &[&str] = &[
     "operators",
     "string_literals",
     "regex_literals",
+    "regex_field_pairs",
     "ip_literals",
     "int_literals",
 ];
@@ -117,6 +118,17 @@ fn parse_expression(py: Python<'_>, expr: &str, phase: Option<&str>) -> PyResult
         "regex_literals",
         PyList::new(py, &extractor.regex_literals)?,
     )?;
+    // (field, regex) tuples — populated when the LHS of `matches` is a
+    // plain field. Empty for function-call LHS or non-matches operators.
+    // Consumers like CF546 (suspicious_regex) use this for per-field
+    // heuristics that can't be expressed against the flat regex_literals
+    // list alone.
+    let pairs = PyList::empty(py);
+    for (field, regex) in &extractor.regex_field_pairs {
+        let pair = PyList::new(py, [field.as_str(), regex.as_str()])?;
+        pairs.append(pair)?;
+    }
+    dict.set_item("regex_field_pairs", pairs)?;
     dict.set_item("ip_literals", PyList::new(py, &extractor.ip_literals)?)?;
     dict.set_item("int_literals", PyList::new(py, &extractor.int_literals)?)?;
     if extractor.depth_exceeded() {

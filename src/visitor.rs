@@ -30,6 +30,15 @@ macro_rules! dedup_add {
     };
 }
 
+/// Return the bare field name if `index_expr` is a plain field reference.
+/// Returns `None` for function-call LHS expressions.
+fn field_name_of(index_expr: &IndexExpr) -> Option<String> {
+    match index_expr.identifier() {
+        IdentifierExpr::Field(field) => Some(field.name().to_owned()),
+        IdentifierExpr::FunctionCallExpr(_) => None,
+    }
+}
+
 /// Extracts all components from a wirefilter AST for the ExpressionInfo contract.
 pub struct ExpressionExtractor {
     pub fields: Vec<String>,
@@ -40,6 +49,14 @@ pub struct ExpressionExtractor {
     pub ip_literals: Vec<String>,
     pub int_literals: Vec<i64>,
 
+    /// (field, regex) pairs recorded whenever a `matches` operator is hit
+    /// against a plain field LHS (not a function call). Lets consumers
+    /// apply per-field heuristics (e.g. detecting unescaped `.` in a
+    /// regex compared against a hostname field) that the flat
+    /// `regex_literals` list can't express. Pairs are deduped on the
+    /// (field, regex) key.
+    pub regex_field_pairs: Vec<(String, String)>,
+
     seen_fields: HashSet<String>,
     seen_functions: HashSet<String>,
     seen_operators: HashSet<String>,
@@ -47,6 +64,7 @@ pub struct ExpressionExtractor {
     seen_regexes: HashSet<String>,
     seen_ips: HashSet<String>,
     seen_ints: HashSet<i64>,
+    seen_field_regex_pairs: HashSet<(String, String)>,
 
     depth: usize,
     max_depth_exceeded: bool,
@@ -62,6 +80,7 @@ impl ExpressionExtractor {
             regex_literals: Vec::new(),
             ip_literals: Vec::new(),
             int_literals: Vec::new(),
+            regex_field_pairs: Vec::new(),
             seen_fields: HashSet::new(),
             seen_functions: HashSet::new(),
             seen_operators: HashSet::new(),
@@ -69,6 +88,7 @@ impl ExpressionExtractor {
             seen_regexes: HashSet::new(),
             seen_ips: HashSet::new(),
             seen_ints: HashSet::new(),
+            seen_field_regex_pairs: HashSet::new(),
             depth: 0,
             max_depth_exceeded: false,
         }
@@ -290,9 +310,27 @@ impl ExpressionExtractor {
     }
 
     /// Walk a comparison expression: LHS + operator + RHS literals.
+    ///
+    /// Also records `(field, regex)` pairs into `regex_field_pairs` when the
+    /// LHS is a plain field and the operator is `matches`. Function-call
+    /// LHS (`lower(http.host) matches "..."`) is intentionally not paired
+    /// because the field context is ambiguous after a transformation.
     fn walk_comparison(&mut self, cmp: &ComparisonExpr) {
+        let lhs_field = field_name_of(cmp.lhs_expr());
         self.walk_index_expr(cmp.lhs_expr());
+        if let (Some(field), ComparisonOpExpr::Matches(regex)) =
+            (lhs_field.as_deref(), cmp.operator())
+        {
+            self.add_field_regex_pair(field, &regex.to_string());
+        }
         self.extract_comparison_op(cmp.operator());
+    }
+
+    fn add_field_regex_pair(&mut self, field: &str, regex: &str) {
+        let key = (field.to_owned(), regex.to_owned());
+        if self.seen_field_regex_pairs.insert(key.clone()) {
+            self.regex_field_pairs.push(key);
+        }
     }
 
     /// Entry point: walk the root LogicalExpr of a FilterAst.
@@ -487,6 +525,53 @@ mod tests {
         assert!(ex.operators.contains(&"matches".to_string()));
         assert_eq!(ex.regex_literals.len(), 1);
         assert!(ex.regex_literals[0].contains("/api/v[0-9]+"));
+    }
+
+    // ── Field-regex pairing (regex_field_pairs) ──────────────
+
+    #[test]
+    fn regex_field_pair_recorded_for_plain_field_lhs() {
+        let ex = extract_expr(r#"http.host matches "api\\.example\\.com""#);
+        assert_eq!(ex.regex_field_pairs.len(), 1);
+        let (field, regex) = &ex.regex_field_pairs[0];
+        assert_eq!(field, "http.host");
+        assert!(regex.contains("api"));
+    }
+
+    #[test]
+    fn regex_field_pair_dedup() {
+        // Same (field, regex) twice → one pair.
+        let ex = extract_expr(r#"http.host matches "x" and http.host matches "x""#);
+        assert_eq!(ex.regex_field_pairs.len(), 1);
+    }
+
+    #[test]
+    fn regex_field_pair_distinct_per_field() {
+        // Two different fields with `matches` → two pairs.
+        let ex = extract_expr(r#"http.host matches "a" or http.request.uri.path matches "b""#);
+        let pair_set: std::collections::HashSet<_> = ex
+            .regex_field_pairs
+            .iter()
+            .map(|(f, _)| f.as_str())
+            .collect();
+        assert!(pair_set.contains("http.host"));
+        assert!(pair_set.contains("http.request.uri.path"));
+    }
+
+    #[test]
+    fn regex_field_pair_skipped_for_function_call_lhs() {
+        // `lower(http.host) matches "..."` — function-call LHS, no pair.
+        // (regex still appears in regex_literals for the flat list.)
+        let ex = extract_expr(r#"lower(http.host) matches "x""#);
+        assert!(ex.regex_field_pairs.is_empty());
+        assert_eq!(ex.regex_literals.len(), 1);
+    }
+
+    #[test]
+    fn regex_field_pair_not_recorded_for_non_matches_operator() {
+        // `eq` against a string literal — no regex involved, no pair.
+        let ex = extract_expr(r#"http.host eq "example.com""#);
+        assert!(ex.regex_field_pairs.is_empty());
     }
 
     // ── Wildcard extraction ──────────────────────────────────

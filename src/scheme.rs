@@ -3,7 +3,7 @@
 //! Registers Cloudflare fields and functions with their types.
 //! A single scheme is built once and cached in a `LazyLock` static:
 //!
-//! - `SCHEME` — 173 fields (incl. `http.request.uri.path`), 34 functions.
+//! - `SCHEME` — 178 fields (incl. `http.request.uri.path`), 36 functions.
 //!
 //! # Panics
 //!
@@ -90,7 +90,7 @@ fn any_param(val_type: Type) -> SimpleFunctionParam {
     }
 }
 
-/// The wirefilter scheme — 173 fields, 34 functions.
+/// The wirefilter scheme — 178 fields, 36 functions.
 ///
 /// `http.request.uri.path` is registered as a regular field. octorules always
 /// uses this single scheme for all phases; transform-phase function-call syntax
@@ -141,9 +141,15 @@ fn register_common_fields(b: &mut SchemeBuilder) {
         .unwrap();
     b.add_field("cf.client.bot", Type::Bool).unwrap();
     b.add_field("cf.edge.client_tcp", Type::Bool).unwrap();
+    b.add_field("cf.edge.l4.delivery_rate", Type::Int).unwrap();
     b.add_field("cf.edge.server_ip", Type::Ip).unwrap();
     b.add_field("cf.edge.server_port", Type::Int).unwrap();
     b.add_field("cf.hostname.metadata", Type::Bytes).unwrap();
+    b.add_field(
+        "cf.llm.prompt.custom_topic_categories",
+        Type::Map(Type::Int.into()),
+    )
+    .unwrap();
     b.add_field("cf.llm.prompt.detected", Type::Bool).unwrap();
     b.add_field("cf.llm.prompt.injection_score", Type::Int)
         .unwrap();
@@ -154,6 +160,7 @@ fn register_common_fields(b: &mut SchemeBuilder) {
     .unwrap();
     b.add_field("cf.llm.prompt.pii_detected", Type::Bool)
         .unwrap();
+    b.add_field("cf.llm.prompt.token_count", Type::Int).unwrap();
     b.add_field(
         "cf.llm.prompt.unsafe_topic_categories",
         Type::Array(Type::Bytes.into()),
@@ -166,13 +173,23 @@ fn register_common_fields(b: &mut SchemeBuilder) {
     b.add_field("cf.response.1xxx_code", Type::Int).unwrap();
     b.add_field("cf.response.error_type", Type::Bytes).unwrap();
     b.add_field("cf.threat_score", Type::Int).unwrap();
+    b.add_field("cf.timings.client_quic_rtt_msec", Type::Int)
+        .unwrap();
     b.add_field("cf.timings.client_tcp_rtt_msec", Type::Int)
         .unwrap();
     b.add_field("cf.timings.edge_msec", Type::Int).unwrap();
     b.add_field("cf.timings.origin_ttfb_msec", Type::Int)
         .unwrap();
+    b.add_field("cf.timings.worker_msec", Type::Int).unwrap();
     b.add_field("cf.tls_cipher", Type::Bytes).unwrap();
     b.add_field("cf.tls_ciphers_sha1", Type::Bytes).unwrap();
+    b.add_field("cf.tls_client_auth.cert_chain_rfc9440", Type::Bytes)
+        .unwrap();
+    b.add_field(
+        "cf.tls_client_auth.cert_chain_rfc9440_too_large",
+        Type::Bool,
+    )
+    .unwrap();
     b.add_field("cf.tls_client_auth.cert_fingerprint_sha1", Type::Bytes)
         .unwrap();
     b.add_field("cf.tls_client_auth.cert_fingerprint_sha256", Type::Bytes)
@@ -194,6 +211,10 @@ fn register_common_fields(b: &mut SchemeBuilder) {
     b.add_field("cf.tls_client_auth.cert_presented", Type::Bool)
         .unwrap();
     b.add_field("cf.tls_client_auth.cert_revoked", Type::Bool)
+        .unwrap();
+    b.add_field("cf.tls_client_auth.cert_rfc9440", Type::Bytes)
+        .unwrap();
+    b.add_field("cf.tls_client_auth.cert_rfc9440_too_large", Type::Bool)
         .unwrap();
     b.add_field("cf.tls_client_auth.cert_serial", Type::Bytes)
         .unwrap();
@@ -365,21 +386,6 @@ fn register_common_fields(b: &mut SchemeBuilder) {
     )
     .unwrap();
     b.add_field(
-        "http.request.jwt.claims.exp.sec",
-        Type::Map(Type::Array(Type::Int.into()).into()),
-    )
-    .unwrap();
-    b.add_field(
-        "http.request.jwt.claims.exp.sec.names",
-        Type::Array(Type::Bytes.into()),
-    )
-    .unwrap();
-    b.add_field(
-        "http.request.jwt.claims.exp.sec.values",
-        Type::Array(Type::Int.into()),
-    )
-    .unwrap();
-    b.add_field(
         "http.request.jwt.claims.iat.sec",
         Type::Map(Type::Array(Type::Int.into()).into()),
     )
@@ -497,8 +503,6 @@ fn register_common_fields(b: &mut SchemeBuilder) {
         Type::Array(Type::Bytes.into()),
     )
     .unwrap();
-    b.add_field("http.response.headers.truncated", Type::Bool)
-        .unwrap();
     b.add_field("http.user_agent", Type::Bytes).unwrap();
     b.add_field("http.x_forwarded_for", Type::Bytes).unwrap();
     b.add_field("ip.src", Type::Ip).unwrap();
@@ -578,7 +582,7 @@ fn register_common_fields(b: &mut SchemeBuilder) {
     b.add_field("cf.zone.plan", Type::Bytes).unwrap();
 }
 
-/// Register all 34 functions shared by both schemes.
+/// Register all 36 functions shared by both schemes.
 ///
 /// Source: <https://developers.cloudflare.com/ruleset-engine/rules-language/functions/>
 fn register_common_functions(b: &mut SchemeBuilder) {
@@ -872,6 +876,20 @@ fn register_common_functions(b: &mut SchemeBuilder) {
         ),
     )
     .unwrap();
+
+    // is_jwt_valid / is_jwt_present: (Bytes) → Bool
+    //
+    // Cloudflare API Shield JWT validation. The argument is a UUID string
+    // *literal* identifying a token configuration — NOT a header value /
+    // field. See https://developers.cloudflare.com/api-shield/security/
+    // jwt-validation/configure/. Use `literal_param`, not `field_param`.
+    for name in ["is_jwt_valid", "is_jwt_present"] {
+        b.add_function(
+            name,
+            simple_fn(vec![literal_param(Type::Bytes)], Type::Bool),
+        )
+        .unwrap();
+    }
 }
 
 /// Common field definitions as `(name, python_type)` tuples.
@@ -907,6 +925,11 @@ pub fn common_field_defs() -> &'static [(&'static str, &'static str)] {
                 Type::Map(inner) => {
                     let inner_ty: Type = (*inner).into();
                     match inner_ty {
+                        // Wirefilter's Map keys are always strings; the
+                        // `Map<X>` shorthand maps to `MAP_STRING_<X>` on
+                        // the Python side.
+                        Type::Bytes => "MAP_STRING_STRING",
+                        Type::Int => "MAP_STRING_INT",
                         Type::Array(inner2) => {
                             let inner2_ty: Type = inner2.into();
                             match inner2_ty {
@@ -955,13 +978,16 @@ const COMMON_FIELD_NAMES: &[&str] = &[
     "cf.bot_management.verified_bot",
     "cf.client.bot",
     "cf.edge.client_tcp",
+    "cf.edge.l4.delivery_rate",
     "cf.edge.server_ip",
     "cf.edge.server_port",
     "cf.hostname.metadata",
+    "cf.llm.prompt.custom_topic_categories",
     "cf.llm.prompt.detected",
     "cf.llm.prompt.injection_score",
     "cf.llm.prompt.pii_categories",
     "cf.llm.prompt.pii_detected",
+    "cf.llm.prompt.token_count",
     "cf.llm.prompt.unsafe_topic_categories",
     "cf.llm.prompt.unsafe_topic_detected",
     "cf.random_seed",
@@ -969,11 +995,15 @@ const COMMON_FIELD_NAMES: &[&str] = &[
     "cf.response.1xxx_code",
     "cf.response.error_type",
     "cf.threat_score",
+    "cf.timings.client_quic_rtt_msec",
     "cf.timings.client_tcp_rtt_msec",
     "cf.timings.edge_msec",
     "cf.timings.origin_ttfb_msec",
+    "cf.timings.worker_msec",
     "cf.tls_cipher",
     "cf.tls_ciphers_sha1",
+    "cf.tls_client_auth.cert_chain_rfc9440",
+    "cf.tls_client_auth.cert_chain_rfc9440_too_large",
     "cf.tls_client_auth.cert_fingerprint_sha1",
     "cf.tls_client_auth.cert_fingerprint_sha256",
     "cf.tls_client_auth.cert_issuer_dn",
@@ -985,6 +1015,8 @@ const COMMON_FIELD_NAMES: &[&str] = &[
     "cf.tls_client_auth.cert_not_before",
     "cf.tls_client_auth.cert_presented",
     "cf.tls_client_auth.cert_revoked",
+    "cf.tls_client_auth.cert_rfc9440",
+    "cf.tls_client_auth.cert_rfc9440_too_large",
     "cf.tls_client_auth.cert_serial",
     "cf.tls_client_auth.cert_ski",
     "cf.tls_client_auth.cert_subject_dn",
@@ -1043,9 +1075,6 @@ const COMMON_FIELD_NAMES: &[&str] = &[
     "http.request.jwt.claims.aud",
     "http.request.jwt.claims.aud.names",
     "http.request.jwt.claims.aud.values",
-    "http.request.jwt.claims.exp.sec",
-    "http.request.jwt.claims.exp.sec.names",
-    "http.request.jwt.claims.exp.sec.values",
     "http.request.jwt.claims.iat.sec",
     "http.request.jwt.claims.iat.sec.names",
     "http.request.jwt.claims.iat.sec.values",
@@ -1076,7 +1105,6 @@ const COMMON_FIELD_NAMES: &[&str] = &[
     "http.response.headers",
     "http.response.headers.names",
     "http.response.headers.values",
-    "http.response.headers.truncated",
     "http.user_agent",
     "http.x_forwarded_for",
     "ip.src",
@@ -1144,6 +1172,8 @@ const COMMON_FUNCTION_NAMES: &[&str] = &[
     "remove_query_args",
     "bit_slice",
     "wildcard_replace",
+    "is_jwt_valid",
+    "is_jwt_present",
 ];
 
 #[cfg(test)]
@@ -1154,28 +1184,117 @@ mod tests {
 
     #[test]
     fn scheme_has_all_fields() {
-        // 172 common + 1 (http.request.uri.path) = 173
-        assert_eq!(SCHEME.field_count(), 173);
+        // 169 common + http.request.uri.path + cf.zone.{name,plan} +
+        // 6 ip.geoip.* aliases = 178
+        assert_eq!(SCHEME.field_count(), 178);
     }
 
     #[test]
     fn common_field_names_array_length() {
         // COMMON_FIELD_NAMES is the subset exposed via get_schema_info().
-        // 164 names + 1 hardcoded (http.request.uri.path) + 8 registered
-        // but intentionally excluded from sync = 173 total scheme fields.
-        assert_eq!(COMMON_FIELD_NAMES.len(), 164);
+        // 169 names + http.request.uri.path + cf.zone.{name,plan} +
+        // 6 ip.geoip.* aliases = 178 total scheme fields.
+        assert_eq!(COMMON_FIELD_NAMES.len(), 169);
     }
 
     #[test]
     fn common_function_names_array_length() {
         // COMMON_FUNCTION_NAMES lists all functions exposed via get_schema_info().
-        assert_eq!(COMMON_FUNCTION_NAMES.len(), 34);
+        assert_eq!(COMMON_FUNCTION_NAMES.len(), 36);
     }
 
     #[test]
     fn scheme_has_all_functions() {
-        // 3 built-in (any, all, concat) + 31 custom = 34
-        assert_eq!(SCHEME.function_count(), 34);
+        // 3 built-in (any, all, concat) + 33 custom = 36
+        assert_eq!(SCHEME.function_count(), 36);
+    }
+
+    // ── 2026 CF additions — verify presence ──
+
+    #[test]
+    fn scheme_has_rfc9440_mtls_fields() {
+        // RFC 9440 Client-Cert HTTP header — added to CF on 2026-03-25/30.
+        for name in [
+            "cf.tls_client_auth.cert_chain_rfc9440",
+            "cf.tls_client_auth.cert_chain_rfc9440_too_large",
+            "cf.tls_client_auth.cert_rfc9440",
+            "cf.tls_client_auth.cert_rfc9440_too_large",
+        ] {
+            assert!(
+                SCHEME.get_field(name).is_ok(),
+                "RFC 9440 field {name:?} not registered"
+            );
+        }
+    }
+
+    #[test]
+    fn scheme_has_2026_l4_and_timing_fields() {
+        for name in [
+            "cf.edge.l4.delivery_rate",
+            "cf.timings.client_quic_rtt_msec",
+            "cf.timings.worker_msec",
+        ] {
+            assert!(
+                SCHEME.get_field(name).is_ok(),
+                "2026 CF field {name:?} not registered"
+            );
+        }
+    }
+
+    #[test]
+    fn scheme_has_2026_llm_fields() {
+        for name in [
+            "cf.llm.prompt.custom_topic_categories",
+            "cf.llm.prompt.token_count",
+        ] {
+            assert!(
+                SCHEME.get_field(name).is_ok(),
+                "2026 CF LLM field {name:?} not registered"
+            );
+        }
+    }
+
+    #[test]
+    fn jwt_validation_functions_registered_with_literal_arg() {
+        // Cloudflare API Shield JWT validation. Argument is a UUID string
+        // *literal*, not a field — see scheme.rs comment + CF docs.
+        for name in ["is_jwt_valid", "is_jwt_present"] {
+            SCHEME
+                .get_function(name)
+                .unwrap_or_else(|_| panic!("function {name:?} not registered"));
+        }
+        // Parse with a literal UUID argument — the documented usage.
+        let result = SCHEME.parse(r#"is_jwt_valid("51231d16-01f1-48e3-93f8-91c99e81288e")"#);
+        assert!(
+            result.is_ok(),
+            "literal-arg parse failed: {:?}",
+            result.err()
+        );
+    }
+
+    // ── Speculative-API removals — regression guard ──
+    //
+    // These four fields were registered earlier by pattern-matching CF
+    // surface ("if request side has it, response side must too"; "if
+    // other JWT claims have .sec siblings, exp must too") without
+    // verifying CF accepts them. CF doesn't. Adding any of these back
+    // must be backed by current CF docs evidence.
+
+    #[test]
+    fn removed_speculative_fields_stay_removed() {
+        for name in [
+            "http.request.jwt.claims.exp.sec",
+            "http.request.jwt.claims.exp.sec.names",
+            "http.request.jwt.claims.exp.sec.values",
+            "http.response.headers.truncated",
+        ] {
+            assert!(
+                SCHEME.get_field(name).is_err(),
+                "{name:?} is intentionally absent (speculative addition not \
+                 backed by CF docs); do not re-add without grep-verifying \
+                 against the canonical CF fields YAML"
+            );
+        }
     }
 
     #[test]
