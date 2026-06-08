@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.63"
 name = "rand"
-version = "0.9.2"
+version = "0.9.3"
 authors = [
     "The Rand Project Developers",
     "The Rust Project Developers",
@@ -67,7 +67,7 @@ default = [
     "small_rng",
     "thread_rng",
 ]
-log = ["dep:log"]
+log = []
 nightly = []
 os_rng = ["rand_core/os_rng"]
 serde = [
@@ -92,10 +92,6 @@ unbiased = []
 [lib]
 name = "rand"
 path = "src/lib.rs"
-
-[dependencies.log]
-version = "0.4.4"
-optional = true
 
 [dependencies.rand_chacha]
 version = "0.9.0"
