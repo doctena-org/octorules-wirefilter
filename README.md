@@ -38,7 +38,7 @@ expression_bridge.py          Python-side routing layer
 
 A single wirefilter scheme is built at startup and cached:
 
-- **164 fields** exposed via `get_schema_info()`, **34 functions**.
+- **169 fields** exposed via `get_schema_info()`, **36 functions**.
 - **Named list support** — expressions like `ip.src in $my_list` parse
   without error. `AlwaysList` is registered for Int, Ip, and Bytes types
   so any `$name` reference is accepted. Actual list validation (existence,
@@ -106,8 +106,8 @@ result = parse_expression('bogus_field eq "x"')
 # {'error': '...', 'fields': [], 'functions': [], 'operators': [], ...}
 ```
 
-**Returns** a dict with keys `fields`, `functions`, `operators`, `string_literals`, `regex_literals`, `ip_literals`, `int_literals` (all lists), plus:
-- On success: lists populated with extracted values. If AST nesting exceeded the depth limit, `depth_exceeded: true` is included.
+**Returns** a dict with keys `fields`, `functions`, `operators`, `string_literals`, `regex_literals`, `ip_literals`, `int_literals`, `regex_field_pairs` (all lists), plus:
+- On success: lists populated with extracted values. `regex_field_pairs` holds `[field, regex]` pairs showing which field each regex is matched against (e.g. `[["http.request.uri.path", "^/api"]]`). If AST nesting exceeded the depth limit, `depth_exceeded: true` is included.
 - On failure: `error` (string) with all list keys present but empty.
 
 Expressions exceeding 1 MiB are rejected with an error dict before parsing.

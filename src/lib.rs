@@ -57,7 +57,8 @@ fn set_empty_result_keys(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<(
 ///
 /// Returns a Python dict with:
 ///   - On success: `{"fields": [...], "functions": [...], "operators": [...], ...}`
-///   - On failure: `{"error": "parse error description"}`
+///   - On failure: `{"error": "parse error description", "fields": [], ...}` —
+///     the error string plus every standard result key present as an empty list.
 ///
 /// Empty or whitespace-only expressions are valid and return empty lists
 /// for all keys (not an error dict).

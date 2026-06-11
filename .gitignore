@@ -36,3 +36,6 @@ venv/
 *.swo
 *~
 .DS_Store
+
+# Local knowledge-graph output
+graphify-out/
