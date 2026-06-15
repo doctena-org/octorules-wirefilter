@@ -1,16 +1,17 @@
 #![allow(missing_docs)]
 //! Crate-private implementation of PyClassObject
 
-use std::cell::UnsafeCell;
-use std::marker::PhantomData;
-use std::mem::{offset_of, ManuallyDrop, MaybeUninit};
-use std::ptr::addr_of_mut;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use core::cell::UnsafeCell;
+use core::marker::PhantomData;
+use core::mem::{offset_of, ManuallyDrop, MaybeUninit};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::impl_::pyclass::{
     PyClassBaseType, PyClassDict, PyClassImpl, PyClassThreadChecker, PyClassWeakRef, PyObjectOffset,
 };
 use crate::internal::get_slot::{TP_DEALLOC, TP_FREE};
+#[cfg(RustPython)]
+use crate::sync::PyOnceLock;
 use crate::type_object::{PyLayout, PySizedLayout, PyTypeInfo};
 use crate::types::PyType;
 use crate::{ffi, PyClass, Python};
@@ -265,7 +266,18 @@ unsafe fn tp_dealloc(slf: *mut ffi::PyObject, type_obj: &crate::Bound<'_, PyType
         let actual_type = PyType::from_borrowed_type_ptr(py, ffi::Py_TYPE(slf));
 
         // For `#[pyclass]` types which inherit from PyAny, we can just call tp_free
-        if std::ptr::eq(type_ptr, std::ptr::addr_of!(ffi::PyBaseObject_Type)) {
+        #[cfg(not(RustPython))]
+        if core::ptr::eq(type_ptr, &raw const ffi::PyBaseObject_Type) {
+            let tp_free = actual_type
+                .get_slot(TP_FREE)
+                .expect("PyBaseObject_Type should have tp_free");
+            return tp_free(slf.cast());
+        }
+        #[cfg(RustPython)]
+        if core::ptr::eq(type_ptr, {
+            static TYPE: PyOnceLock<crate::Py<PyType>> = PyOnceLock::new();
+            TYPE.import(py, "builtins", "object").unwrap().as_type_ptr()
+        }) {
             let tp_free = actual_type
                 .get_slot(TP_FREE)
                 .expect("PyBaseObject_Type should have tp_free");
@@ -390,7 +402,7 @@ impl<T: PyClassImpl<Layout = Self>> PyClassObjectLayout<T> for PyStaticClassObje
     };
 
     const BASIC_SIZE: ffi::Py_ssize_t = {
-        let size = std::mem::size_of::<Self>();
+        let size = core::mem::size_of::<Self>();
         assert!(size <= ffi::Py_ssize_t::MAX as usize);
         size as _
     };
@@ -418,7 +430,7 @@ impl<T: PyClassImpl<Layout = Self>> PyClassObjectLayout<T> for PyStaticClassObje
             contents: MaybeUninit<PyClassObjectContents<T>>,
         }
         let obj = obj.cast::<PartiallyInitializedClassObject<T>>();
-        unsafe { addr_of_mut!((*obj).contents) }
+        unsafe { &raw mut (*obj).contents }
     }
 
     fn contents(&self) -> &PyClassObjectContents<T> {
@@ -505,7 +517,7 @@ impl<T: PyClass<Layout = Self>> PyClassObjectLayout<T> for PyVariableClassObject
     /// Gets the offset of the contents from the start of the struct in bytes.
     const CONTENTS_OFFSET: PyObjectOffset = PyObjectOffset::Relative(0);
     const BASIC_SIZE: ffi::Py_ssize_t = {
-        let size = std::mem::size_of::<PyClassObjectContents<T>>();
+        let size = core::mem::size_of::<PyClassObjectContents<T>>();
         assert!(size <= ffi::Py_ssize_t::MAX as usize);
         // negative to indicate 'extra' space that cpython will allocate for us
         -(size as ffi::Py_ssize_t)
@@ -626,6 +638,9 @@ mod tests {
     struct ImmutableChildOfImmutableChildOfImmutableBase;
 
     #[pyclass(crate = "crate", subclass)]
+    struct BaseWithoutData;
+
+    #[pyclass(crate = "crate", subclass)]
     struct BaseWithData(#[allow(unused)] u64);
 
     #[pyclass(crate = "crate", extends = BaseWithData)]
@@ -636,13 +651,32 @@ mod tests {
 
     #[test]
     fn test_inherited_size() {
-        let base_size = PyStaticClassObject::<BaseWithData>::BASIC_SIZE;
-        assert!(base_size > 0); // negative indicates variable sized
-        assert_eq!(
-            base_size,
-            PyStaticClassObject::<ChildWithoutData>::BASIC_SIZE
-        );
-        assert!(base_size < PyStaticClassObject::<ChildWithData>::BASIC_SIZE);
+        #[cfg(all(Py_LIMITED_API, Py_GIL_DISABLED))]
+        type ClassObject<T> = PyVariableClassObject<T>;
+        #[cfg(not(all(Py_LIMITED_API, Py_GIL_DISABLED)))]
+        type ClassObject<T> = PyStaticClassObject<T>;
+
+        let base_without_data_size = ClassObject::<BaseWithoutData>::BASIC_SIZE;
+        let base_with_data_size = ClassObject::<BaseWithData>::BASIC_SIZE;
+        let child_without_data_size = ClassObject::<ChildWithoutData>::BASIC_SIZE;
+        let child_with_data_size = ClassObject::<ChildWithData>::BASIC_SIZE;
+        #[cfg(all(Py_LIMITED_API, Py_GIL_DISABLED))]
+        {
+            assert!(base_without_data_size < 0); // negative indicates variable sized
+            assert!(base_with_data_size < base_without_data_size);
+            assert_eq!(child_without_data_size, 0);
+            assert_eq!(
+                base_with_data_size - base_without_data_size,
+                child_with_data_size
+            );
+        }
+        #[cfg(not(all(Py_LIMITED_API, Py_GIL_DISABLED)))]
+        {
+            assert!(base_without_data_size > 0);
+            assert!(base_with_data_size > base_without_data_size);
+            assert_eq!(base_with_data_size, child_without_data_size);
+            assert!(base_with_data_size < child_with_data_size);
+        }
     }
 
     fn assert_mutable<T: PyClass<Frozen = False, PyClassMutability = MutableClass>>() {}

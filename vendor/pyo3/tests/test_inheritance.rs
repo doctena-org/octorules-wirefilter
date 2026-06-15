@@ -57,8 +57,8 @@ struct SubClass {
 #[pymethods]
 impl SubClass {
     #[new]
-    fn new() -> (Self, BaseClass) {
-        (SubClass { val2: 5 }, BaseClass { val1: 10 })
+    fn new() -> PyClassInitializer<Self> {
+        PyClassInitializer::from(BaseClass { val1: 10 }).add_subclass(SubClass { val2: 5 })
     }
     fn sub_method(&self, x: usize) -> usize {
         x * self.val2
@@ -146,9 +146,9 @@ struct SubClass2 {}
 #[pymethods]
 impl SubClass2 {
     #[new]
-    fn new(value: isize) -> PyResult<(Self, BaseClassWithResult)> {
+    fn new(value: isize) -> PyResult<PyClassInitializer<Self>> {
         let base = BaseClassWithResult::new(value)?;
-        Ok((Self {}, base))
+        Ok(PyClassInitializer::from(base).add_subclass(Self {}))
     }
 }
 
@@ -177,8 +177,15 @@ except Exception as e:
 mod inheriting_native_type {
     use super::*;
     use pyo3::exceptions::PyException;
+
     #[cfg(not(GraalPy))]
-    use pyo3::types::PyDict;
+    use {
+        pyo3::types::{PyCapsule, PyDict},
+        std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+    };
 
     #[cfg(not(any(PyPy, GraalPy)))]
     #[test]
@@ -244,17 +251,22 @@ mod inheriting_native_type {
     #[test]
     fn inherit_dict_drop() {
         Python::attach(|py| {
+            let dropped = Arc::new(AtomicBool::new(false));
+            let destructor_drop = Arc::clone(&dropped);
+            let item = PyCapsule::new_with_value_and_destructor(
+                py,
+                0,
+                c"inherit_dict_drop",
+                move |_, _| destructor_drop.store(true, Ordering::Relaxed),
+            )
+            .unwrap();
+
             let dict_sub = pyo3::Py::new(py, DictWithName::new()).unwrap();
-            assert_eq!(dict_sub.get_refcnt(py), 1);
-
-            let item = &py.eval(c"object()", None, None).unwrap();
-            assert_eq!(item.get_refcnt(), 1);
-
-            dict_sub.bind(py).set_item("foo", item).unwrap();
-            assert_eq!(item.get_refcnt(), 2);
-
+            dict_sub.bind(py).set_item("foo", &item).unwrap();
+            drop(item);
+            assert!(!dropped.load(Ordering::Relaxed));
             drop(dict_sub);
-            assert_eq!(item.get_refcnt(), 1);
+            assert!(dropped.load(Ordering::Relaxed));
         })
     }
 
@@ -299,6 +311,50 @@ mod inheriting_native_type {
                 "#
             )
         })
+    }
+
+    #[cfg(Py_3_12)]
+    #[test]
+    fn inherit_tzinfo() {
+        #[pyclass(extends=pyo3::types::PyTzInfo)]
+        struct TzInfoWithName {
+            #[pyo3(get)]
+            name: &'static str,
+        }
+
+        #[pymethods]
+        impl TzInfoWithName {
+            #[new]
+            fn new() -> Self {
+                Self { name: "Hello :)" }
+            }
+
+            #[pyo3(signature = (_dt, /))]
+            fn utcoffset<'py>(
+                &self,
+                _dt: Option<&Bound<'_, pyo3::types::PyDateTime>>,
+                py: Python<'py>,
+            ) -> PyResult<Bound<'py, pyo3::types::PyDelta>> {
+                pyo3::types::PyDelta::new(py, 0, 3600, 0, true)
+            }
+        }
+
+        Python::attach(|py| {
+            let tz = pyo3::Py::new(py, TzInfoWithName::new()).unwrap();
+            py_run!(
+                py,
+                tz,
+                r#"
+                    import datetime
+
+                    assert isinstance(tz, datetime.tzinfo)
+                    assert tz.name == "Hello :)"
+
+                    dt = datetime.datetime(2024, 1, 1, tzinfo=tz)
+                    assert dt.utcoffset() == datetime.timedelta(hours=1)
+                "#
+            );
+        });
     }
 
     #[test]

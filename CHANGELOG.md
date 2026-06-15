@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] - 2026-06-15
+
+### Changed
+- Updated `pyo3` 0.28.2 -> 0.29.0 for security advisories
+  GHSA-36hh-v3qg-5jq4 (out-of-bounds read in `PyList`/`PyTuple`
+  `nth`/`nth_back`, CVSS 8.7) and GHSA-chgr-c6px-7xpp. Re-vendored.
+  No API or schema changes.
+
 ## [0.4.1] - 2026-06-11
 
 ### Changed

@@ -2,13 +2,15 @@ use crate::attributes::KeywordAttribute;
 use crate::combine_errors::CombineErrors;
 #[cfg(feature = "experimental-inspect")]
 use crate::introspection::{function_introspection_code, introspection_id_const};
+#[cfg(feature = "experimental-inspect")]
+use crate::utils::get_doc;
 use crate::utils::Ctx;
 use crate::{
     attributes::{
         self, get_pyo3_options, take_attributes, take_pyo3_options, CrateAttribute,
         FromPyWithAttribute, NameAttribute, TextSignatureAttribute,
     },
-    method::{self, CallingConvention, FnArg},
+    method::{self, CallingConvention, FnArg, SelfConversionPolicy},
     pymethod::check_generic,
 };
 use proc_macro2::{Span, TokenStream};
@@ -384,28 +386,6 @@ pub fn impl_wrap_pyfunction(
         FunctionSignature::from_arguments(arguments)
     };
 
-    let vis = &func.vis;
-    let name = &func.sig.ident;
-
-    #[cfg(feature = "experimental-inspect")]
-    let introspection = function_introspection_code(
-        pyo3_path,
-        Some(name),
-        &name.to_string(),
-        &signature,
-        None,
-        func.sig.output.clone(),
-        empty(),
-        func.sig.asyncness.is_some(),
-        None,
-    );
-    #[cfg(not(feature = "experimental-inspect"))]
-    let introspection = quote! {};
-    #[cfg(feature = "experimental-inspect")]
-    let introspection_id = introspection_id_const();
-    #[cfg(not(feature = "experimental-inspect"))]
-    let introspection_id = quote! {};
-
     let spec = method::FnSpec {
         tp,
         name: &func.sig.ident,
@@ -418,6 +398,30 @@ pub fn impl_wrap_pyfunction(
         output: func.sig.output.clone(),
     };
 
+    let vis = &func.vis;
+    let name = &func.sig.ident;
+
+    #[cfg(feature = "experimental-inspect")]
+    let introspection = function_introspection_code(
+        pyo3_path,
+        Some(name),
+        &name.to_string(),
+        &spec.signature,
+        None,
+        func.sig.output.clone(),
+        empty(),
+        func.sig.asyncness.is_some(),
+        false,
+        get_doc(&func.attrs, None).as_ref(),
+        None,
+    );
+    #[cfg(not(feature = "experimental-inspect"))]
+    let introspection = quote! {};
+    #[cfg(feature = "experimental-inspect")]
+    let introspection_id = introspection_id_const();
+    #[cfg(not(feature = "experimental-inspect"))]
+    let introspection_id = quote! {};
+
     let wrapper_ident = format_ident!("__pyfunction_{}", spec.name);
     if spec.asyncness.is_some() {
         ensure_spanned!(
@@ -426,13 +430,19 @@ pub fn impl_wrap_pyfunction(
         );
     }
     let calling_convention = CallingConvention::from_signature(&spec.signature);
-    let wrapper = spec.get_wrapper_function(&wrapper_ident, None, calling_convention, ctx)?;
+    let wrapper = spec.get_wrapper_function(
+        &wrapper_ident,
+        None,
+        calling_convention,
+        SelfConversionPolicy::checked(),
+        ctx,
+    )?;
     let methoddef = spec.get_methoddef(
         wrapper_ident,
-        &spec.get_doc(&func.attrs, ctx)?,
+        spec.get_doc(&func.attrs).as_ref(),
         calling_convention,
         ctx,
-    );
+    )?;
 
     let wrapped_pyfunction = quote! {
         // Create a module with the same name as the `#[pyfunction]` - this way `use <the function>`

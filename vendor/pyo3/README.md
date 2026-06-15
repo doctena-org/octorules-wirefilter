@@ -19,7 +19,7 @@
 Requires Rust 1.83 or greater.
 
 PyO3 supports the following Python distributions:
-  - CPython 3.7 or greater
+  - CPython 3.8 or greater
   - PyPy 7.3 (Python 3.11+)
   - GraalPy 25.0 or greater (Python 3.12+)
 
@@ -71,7 +71,7 @@ name = "string_sum"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = "0.28.2"
+pyo3 = "0.29.0"
 ```
 
 **`src/lib.rs`**
@@ -137,7 +137,7 @@ Start a new project with `cargo new` and add  `pyo3` to the `Cargo.toml` like th
 
 ```toml
 [dependencies.pyo3]
-version = "0.28.2"
+version = "0.29.0"
 # Enabling this cargo feature will cause PyO3 to start a Python interpreter on first call to `Python::attach`
 features = ["auto-initialize"]
 ```
@@ -183,6 +183,7 @@ about this topic.
 
 ## Examples
 
+- [anise](https://github.com/nyx-space/anise) _A modern, high-performance toolkit for spacecraft mission design, notably used to help softly land Firefly Blue Ghost on the Moon on 02 Feb 2025._
 - [arro3](https://github.com/kylebarron/arro3) _A minimal Python library for Apache Arrow, connecting to the Rust arrow crate._
     - [arro3-compute](https://github.com/kylebarron/arro3/tree/main/arro3-compute) _`arro3-compute`_
     - [arro3-core](https://github.com/kylebarron/arro3/tree/main/arro3-core) _`arro3-core`_
@@ -206,6 +207,7 @@ about this topic.
 - [geo-index](https://github.com/kylebarron/geo-index) _A Rust crate and [Python library](https://github.com/kylebarron/geo-index/tree/main/python) for packed, immutable, zero-copy spatial indexes._
 - [granian](https://github.com/emmett-framework/granian) _A Rust HTTP server for Python applications._
 - [haem](https://github.com/BooleanCat/haem) _A Python library for working on Bioinformatics problems._
+- [hifitime](https://github.com/nyx-space/hifitime) _A high fidelity time management library for engineering and scientific applications where general relativity and time dilation matter._
 - [html2text-rs](https://github.com/deedy5/html2text_rs) _Python library for converting HTML to markup or plain text._
 - [html-py-ever](https://github.com/PyO3/setuptools-rust/tree/main/examples/html-py-ever) _Using [html5ever](https://github.com/servo/html5ever) through [kuchiki](https://github.com/kuchiki-rs/kuchiki) to speed up html parsing and css-selecting._
 - [hudi-rs](https://github.com/apache/hudi-rs) _The native Rust implementation for Apache Hudi, with C++ & Python API bindings._
@@ -280,4 +282,4 @@ Python is licensed under the [Python License](https://docs.python.org/3/license.
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in PyO3 by you, as defined in the Apache License, shall be dual-licensed as above, without any additional terms or conditions.
 
-<a href="https://www.netlify.com"> <img src="https://www.netlify.com/v3/img/components/netlify-color-accent.svg" alt="Deploys by Netlify" /> </a>
+[![Deploys by Netlify](https://www.netlify.com/assets/badges/netlify-badge-color-accent.svg)](https://www.netlify.com)

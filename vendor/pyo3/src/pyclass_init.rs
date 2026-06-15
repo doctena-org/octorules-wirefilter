@@ -1,11 +1,15 @@
+// TODO https://github.com/PyO3/pyo3/issues/5487
+#![allow(clippy::undocumented_unsafe_blocks)]
+
 //! Contains initialization utilities for `#[pyclass]`.
 use crate::ffi_ptr_ext::FfiPtrExt;
 use crate::impl_::pyclass::{PyClassBaseType, PyClassImpl};
-use crate::impl_::pyclass_init::{PyNativeTypeInitializer, PyObjectInit};
+use crate::impl_::pyclass_init::PyNativeTypeInitializer;
+use crate::internal::pyclass_init::PyObjectInit;
 use crate::pycell::impl_::PyClassObjectLayout;
 use crate::{ffi, Bound, PyClass, PyResult, Python};
 use crate::{ffi::PyTypeObject, pycell::impl_::PyClassObjectContents};
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 
 /// Initializer for our `#[pyclass]` system.
 ///

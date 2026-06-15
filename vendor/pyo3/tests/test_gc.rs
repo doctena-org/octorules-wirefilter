@@ -1,5 +1,6 @@
+// TODO https://github.com/PyO3/pyo3/issues/5487
+#![allow(clippy::undocumented_unsafe_blocks)]
 #![cfg(feature = "macros")]
-#![warn(unsafe_op_in_unsafe_fn)]
 
 use pyo3::class::PyTraverseError;
 use pyo3::class::PyVisit;
@@ -160,9 +161,7 @@ impl CycleWithClear {
     }
 
     fn __clear__(slf: &Bound<'_, Self>) {
-        println!("clear run, refcount before {}", slf.get_refcnt());
         slf.borrow_mut().cycle = None;
-        println!("clear run, refcount after {}", slf.get_refcnt());
     }
 }
 
@@ -256,11 +255,9 @@ fn inheritance_with_new_methods_with_drop() {
     #[pymethods]
     impl SubClassWithDrop {
         #[new]
-        fn new() -> (Self, BaseClassWithDrop) {
-            (
-                SubClassWithDrop { guard: None },
-                BaseClassWithDrop { guard: None },
-            )
+        fn new() -> PyClassInitializer<Self> {
+            PyClassInitializer::from(BaseClassWithDrop { guard: None })
+                .add_subclass(SubClassWithDrop { guard: None })
         }
     }
 
