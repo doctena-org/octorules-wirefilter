@@ -38,7 +38,7 @@ jobs:
             manylinux: musllinux_1_2
     steps:
       - uses: actions/checkout@v6
-      - uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad  # v1
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b  # v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
@@ -66,7 +66,7 @@ jobs:
             3.12
             3.13
             3.14
-      - uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad  # v1
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b  # v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter
@@ -90,7 +90,7 @@ jobs:
             3.12
             3.13
             3.14
-      - uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad  # v1
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b  # v1
         with:
           target: x86_64
           args: --release --out dist --find-interpreter
@@ -106,7 +106,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - uses: PyO3/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad  # v1
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b  # v1
         with:
           command: sdist
           args: --out dist
