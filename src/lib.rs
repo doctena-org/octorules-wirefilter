@@ -1,7 +1,9 @@
 //! PyO3 bindings for the wirefilter expression parser.
 //!
-//! Exposes `parse_expression(expr: str, phase: str | None) -> dict` to Python.
-//! Returns extracted components on success or `{"error": "..."}` on parse failure.
+//! Exposes `parse_expression(expr, scheme=None)` and `get_schema_info(scheme=None)`
+//! to Python. `parse_expression` returns extracted components on success or
+//! `{"error": "..."}` on parse failure; `scheme` selects the HTTP or
+//! `"magic_firewall"` (Layer-4) field set.
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -10,7 +12,7 @@ use wirefilter::ParserSettings;
 mod scheme;
 mod visitor;
 
-use scheme::SCHEME;
+use scheme::{SCHEME, SCHEME_MAGIC};
 use visitor::ExpressionExtractor;
 
 /// Maximum allowed expression length (1 MiB).
@@ -50,10 +52,11 @@ fn set_empty_result_keys(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<(
 
 /// Parse a Cloudflare wirefilter expression and return extracted components.
 ///
-/// The `phase` parameter is accepted for forward compatibility but currently
-/// ignored.  All expressions are validated against a single unified scheme
-/// that covers all known Cloudflare fields.  A future version may use `phase`
-/// to restrict the field set per ruleset phase.
+/// The `scheme` parameter selects the field scheme: `"magic_firewall"` uses
+/// the packet-level Layer-4 scheme (`SCHEME_MAGIC`); any other value (or
+/// `None`) uses the default HTTP `SCHEME`. The caller maps its ruleset phases
+/// to a selector — e.g. octorules-cloudflare maps its account-level Magic
+/// Transit phases to `"magic_firewall"`.
 ///
 /// Returns a Python dict with:
 ///   - On success: `{"fields": [...], "functions": [...], "operators": [...], ...}`
@@ -63,8 +66,8 @@ fn set_empty_result_keys(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<(
 /// Empty or whitespace-only expressions are valid and return empty lists
 /// for all keys (not an error dict).
 #[pyfunction]
-#[pyo3(signature = (expr, phase=None))]
-fn parse_expression(py: Python<'_>, expr: &str, phase: Option<&str>) -> PyResult<Py<PyAny>> {
+#[pyo3(signature = (expr, scheme=None))]
+fn parse_expression(py: Python<'_>, expr: &str, scheme: Option<&str>) -> PyResult<Py<PyAny>> {
     // Reject oversized expressions before any processing.
     if expr.len() > MAX_EXPRESSION_LEN {
         let dict = PyDict::new(py);
@@ -88,11 +91,17 @@ fn parse_expression(py: Python<'_>, expr: &str, phase: Option<&str>) -> PyResult
         return Ok(dict.into());
     }
 
-    let _ = phase; // accepted for API compat, unused
-    let ast = match SCHEME
-        .parser_with_settings(parser_settings())
-        .parse(trimmed)
-    {
+    // Select the field scheme. Account-level Magic Transit (Layer-4) phases use
+    // the packet-level SCHEME_MAGIC; everything else uses the HTTP SCHEME.
+    let parsed = match scheme {
+        Some("magic_firewall") => SCHEME_MAGIC
+            .parser_with_settings(parser_settings())
+            .parse(trimmed),
+        _ => SCHEME
+            .parser_with_settings(parser_settings())
+            .parse(trimmed),
+    };
+    let ast = match parsed {
         Ok(ast) => ast,
         Err(e) => {
             let dict = PyDict::new(py);
@@ -138,17 +147,26 @@ fn parse_expression(py: Python<'_>, expr: &str, phase: Option<&str>) -> PyResult
     Ok(dict.into())
 }
 
-/// Return schema metadata for the wirefilter scheme.
+/// Return schema metadata for a wirefilter scheme.
+///
+/// `scheme` selects the field set: `"magic_firewall"` returns the Layer-4
+/// (Magic Transit) fields; any other value (or `None`) returns the default
+/// HTTP fields. Mirrors `parse_expression`'s `scheme` argument so callers can
+/// build a per-scheme field registry from a single source.
 ///
 /// Returns a Python dict with:
 ///   - `fields`: list of `{"name": "...", "type": "STRING"}` dicts
 ///   - `functions`: list of function name strings
 #[pyfunction]
-fn get_schema_info(py: Python<'_>) -> PyResult<Py<PyAny>> {
+#[pyo3(signature = (scheme=None))]
+fn get_schema_info(py: Python<'_>, scheme: Option<&str>) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
 
     // Fields
-    let field_defs = scheme::common_field_defs();
+    let field_defs = match scheme {
+        Some("magic_firewall") => scheme::magic_field_defs(),
+        _ => scheme::common_field_defs(),
+    };
     let fields_list = PyList::empty(py);
     for (name, py_type) in field_defs {
         let entry = PyDict::new(py);

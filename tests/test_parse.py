@@ -287,24 +287,24 @@ class TestEmptyExpression:
         assert result["fields"] == []
 
 
-class TestPhaseParameter:
-    """Tests for the phase parameter (accepted for compat, ignored)."""
+class TestSchemeParameter:
+    """Tests for the scheme parameter (selects HTTP vs Magic Transit L4)."""
 
-    def test_no_phase(self):
-        """Without phase, http.request.uri.path is a field."""
+    def test_no_scheme(self):
+        """Without scheme, http.request.uri.path is a field (default HTTP)."""
         result = parse_expression('http.request.uri.path eq "/test"')
         assert "error" not in result
         assert "http.request.uri.path" in result["fields"]
 
-    def test_none_phase(self):
-        """Explicit None behaves the same as omitting phase."""
-        result = parse_expression('http.request.uri.path eq "/test"', phase=None)
+    def test_none_scheme(self):
+        """Explicit None behaves the same as omitting scheme (default HTTP)."""
+        result = parse_expression('http.request.uri.path eq "/test"', scheme=None)
         assert "error" not in result
         assert "http.request.uri.path" in result["fields"]
 
-    def test_phase_ignored(self):
-        """Phase parameter is accepted but ignored — always uses same scheme."""
-        for phase in (
+    def test_unknown_scheme_uses_http(self):
+        """Any scheme other than "magic_firewall" falls back to the HTTP scheme."""
+        for scheme in (
             "http_request_firewall_custom",
             "url_rewrite_rules",
             "request_header_rules",
@@ -312,10 +312,25 @@ class TestPhaseParameter:
         ):
             result = parse_expression(
                 'http.request.uri.path eq "/test"',
-                phase=phase,
+                scheme=scheme,
             )
-            assert "error" not in result, f"phase={phase}: {result.get('error')}"
+            assert "error" not in result, f"scheme={scheme}: {result.get('error')}"
             assert "http.request.uri.path" in result["fields"]
+
+    def test_magic_firewall_scheme(self):
+        """scheme="magic_firewall" parses Layer-4 packet fields."""
+        result = parse_expression(
+            'ip.proto eq "tcp" and tcp.dstport in {23 3389}',
+            scheme="magic_firewall",
+        )
+        assert "error" not in result, result.get("error")
+        assert "ip.proto" in result["fields"]
+        assert "tcp.dstport" in result["fields"]
+
+    def test_magic_firewall_rejects_http_fields(self):
+        """HTTP-only fields are unknown in the Layer-4 scheme."""
+        result = parse_expression('http.request.uri.path eq "/test"', scheme="magic_firewall")
+        assert "error" in result
 
 
 class TestIsTimedHmacValidV0:
@@ -631,22 +646,21 @@ class TestInputLimits:
         assert result.get("depth_exceeded") is not True
 
 
-class TestPhaseEdgeCases:
-    """Edge case tests for the phase parameter (accepted for forward
-    compatibility but currently ignored — every input falls back to the
-    default scheme)."""
+class TestSchemeEdgeCases:
+    """Edge cases for the scheme parameter — any value other than
+    "magic_firewall" falls back to the default HTTP scheme."""
 
     @pytest.mark.parametrize(
-        "phase",
+        "scheme",
         [
             None,  # explicit None
             "",  # empty string
-            "url_rewrite_rule",  # misspelled (missing trailing 's')
+            "url_rewrite_rule",  # not a recognized scheme name
             "URL_REWRITE_RULES",  # wrong case
         ],
     )
-    def test_phase_falls_back_to_default(self, phase):
-        result = parse_expression('http.request.uri.path eq "/test"', phase=phase)
+    def test_unknown_scheme_falls_back_to_http(self, scheme):
+        result = parse_expression('http.request.uri.path eq "/test"', scheme=scheme)
         assert "error" not in result
         assert "http.request.uri.path" in result["fields"]
 

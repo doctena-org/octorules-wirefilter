@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-07-01
+
+### Added
+- Magic Firewall (Layer-4) field scheme: `parse_expression` and
+  `get_schema_info` accept `scheme="magic_firewall"`, exposing packet-level
+  fields (`ip.proto`, `tcp.*`, `udp.*`, …) for Cloudflare Magic Transit
+  phases. The default scheme remains HTTP.
+
+### Changed
+- `parse_expression`/`get_schema_info` take a `scheme` argument (previously an
+  unused `phase` parameter).
+
 ## [0.4.2] - 2026-06-15
 
 ### Changed

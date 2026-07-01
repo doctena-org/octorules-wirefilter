@@ -1,14 +1,12 @@
 # octorules-wirefilter
 
-Rust FFI bindings for Cloudflare's [wirefilter](https://github.com/cloudflare/wirefilter) expression parser, exposed to Python via [PyO3](https://pyo3.rs/). When installed, [`octorules lint`](https://github.com/doctena-org/octorules) uses the real wirefilter parser for authoritative expression analysis instead of the built-in regex fallback.
+Rust FFI bindings for Cloudflare's [wirefilter](https://github.com/cloudflare/wirefilter) expression parser, exposed to Python via [PyO3](https://pyo3.rs/). [`octorules-cloudflare`](https://github.com/doctena-org/octorules-cloudflare) depends on this package to parse and type-check rule expressions — both the HTTP scheme and the Magic Transit / Layer-4 (`magic_firewall`) scheme — instead of regex heuristics.
 
 ## Installation
 
 ```bash
-# Install octorules with wirefilter support
-pip install octorules[wirefilter]
-
-# Or install standalone
+# octorules-cloudflare installs this automatically as a required dependency.
+# To install standalone:
 pip install octorules-wirefilter
 ```
 
@@ -22,8 +20,8 @@ expression_bridge.py          Python-side routing layer
     │
     ├─► octorules_wirefilter   (if installed)
     │       │
-    │       ├── lib.rs         PyO3 parse_expression(expr, phase=None)
-    │       ├── scheme.rs      Phase-aware field/function schemes
+    │       ├── lib.rs         PyO3 parse_expression(expr, scheme=None)
+    │       ├── scheme.rs      HTTP + Magic Transit (L4) field/function schemes
     │       └── visitor.rs     AST walker → fields, functions, operators, literals
     │       │
     │       ▼
@@ -32,13 +30,15 @@ expression_bridge.py          Python-side routing layer
     └─► regex fallback         Built-in patterns (always available)
 ```
 
-`octorules` tries to import `octorules_wirefilter` at module load time. If available, expressions are parsed by the real Cloudflare wirefilter engine. On import failure or parse error, the bridge transparently falls back to regex extraction. Either path returns the same `ExpressionInfo` dataclass consumed by the linter.
+`octorules-cloudflare` requires `octorules_wirefilter`, so valid expressions are parsed by the real Cloudflare wirefilter engine. When wirefilter *rejects* an expression (e.g. a type mismatch or unknown function), the bridge runs a regex pass to still extract fields/operators — so the linter's own semantic rules can report on it — while preserving wirefilter's error. That same regex pass also covers the (now unsupported) case where the native extension can't be imported. Either path returns the same `ExpressionInfo` dataclass consumed by the linter.
 
 ## Scheme
 
-A single wirefilter scheme is built at startup and cached:
+Two wirefilter schemes are built at startup and cached:
 
-- **169 fields** exposed via `get_schema_info()`, **36 functions**.
+- **HTTP scheme** (default): 169 fields exposed via `get_schema_info()`, 36 functions.
+- **Magic Transit / Layer-4 scheme** (`magic_firewall`): 33 packet-level fields
+  (`ip.proto`, `tcp.*`, `udp.*`, …) for account-level network phases.
 - **Named list support** — expressions like `ip.src in $my_list` parse
   without error. `AlwaysList` is registered for Int, Ip, and Bytes types
   so any `$name` reference is accepted. Actual list validation (existence,
@@ -46,7 +46,7 @@ A single wirefilter scheme is built at startup and cached:
 - **Wildcard limit** — `ParserSettings` enforces a maximum of 10 `*`
   metacharacters per wildcard pattern to prevent catastrophic backtracking.
 
-The `phase` parameter is accepted for API compatibility but currently unused — all expressions are parsed against the same scheme. Transform-phase function-call syntax (where `http.request.uri.path` is callable) is handled on the Python side.
+The `scheme` parameter selects the field set: `"magic_firewall"` parses against the Layer-4 packet scheme; any other value (or `None`) uses the default HTTP scheme. Transform-phase function-call syntax (where `http.request.uri.path` is callable) is handled on the Python side.
 
 ## Building from source
 
@@ -88,7 +88,7 @@ Tests skip gracefully if the native extension is not installed.
 
 This package exposes two functions:
 
-### `parse_expression(expr, phase=None)`
+### `parse_expression(expr, scheme=None)`
 
 ```python
 from octorules_wirefilter import parse_expression
@@ -97,9 +97,9 @@ from octorules_wirefilter import parse_expression
 result = parse_expression('http.host eq "example.com"')
 # {'fields': ['http.host'], 'operators': ['eq'], 'string_literals': ['example.com'], ...}
 
-# Phase parameter is accepted for forward compatibility but currently unused —
-# all expressions parse against the same scheme regardless of phase value.
-result = parse_expression('lower(http.host) eq "test"', phase="url_rewrite_rules")
+# Pass scheme="magic_firewall" to parse against the Layer-4 packet scheme
+# (Cloudflare Magic Transit / network phases).
+result = parse_expression('ip.proto eq "tcp" and tcp.dstport eq 22', scheme="magic_firewall")
 
 # Parse errors return an error key (all list keys present but empty)
 result = parse_expression('bogus_field eq "x"')
@@ -113,7 +113,7 @@ result = parse_expression('bogus_field eq "x"')
 Expressions exceeding 1 MiB are rejected with an error dict before parsing.
 Nesting depth is capped at 100 levels to prevent stack overflow on pathological input.
 
-### `get_schema_info()`
+### `get_schema_info(scheme=None)`
 
 ```python
 from octorules_wirefilter import get_schema_info
@@ -123,27 +123,23 @@ info = get_schema_info()
 #  'functions': ['lower', 'upper', ...]}
 ```
 
-Returns schema metadata for automated synchronization with the Python linter schemas. Field types use the Python `FieldType` enum names (`STRING`, `INT`, `BOOL`, `IP`, `ARRAY_STRING`, etc.).
+Returns schema metadata for the requested scheme (`scheme="magic_firewall"` for the Layer-4 set; default is HTTP). `octorules-cloudflare` builds its linter field/function registry from this at import time. Field types use the Python `FieldType` enum names (`STRING`, `INT`, `BOOL`, `IP`, `ARRAY_STRING`, etc.).
 
 ## Contributing
 
-**Important:** Field and function registries exist in two places: `src/scheme.rs` (Rust — used by wirefilter for parsing and type checking) and `octorules_cloudflare/linter/schemas/` in the [octorules-cloudflare](https://github.com/doctena-org/octorules-cloudflare) repo (Python — used by the regex fallback parser and lint rules). A pre-commit hook in octorules-cloudflare auto-regenerates `schemas.json` when `overlay.toml` or `pyproject.toml` is modified. Rust-side changes here must still be made manually.
+Field and function definitions live in one place — `src/scheme.rs` (`register_common_fields`, `register_magic_firewall_fields`, `register_common_functions`). `octorules-cloudflare` derives its Python field/function registry from these at import time via `get_schema_info()`; there is no second copy to keep in sync and no generated `schemas.json`.
 
 ### Adding fields
 
-When Cloudflare adds new fields, update `src/scheme.rs` — add the field to `register_common_fields()` **and** to the `COMMON_FIELD_NAMES` array.
-
-Then in the [octorules-cloudflare](https://github.com/doctena-org/octorules-cloudflare) repo, run `python scripts/sync_schemas.py` to regenerate `schemas.json`. If the field needs Python-only metadata (`requires_plan`, `is_response`), add it to `overlay.toml` in that repo first.
+Add the field to `register_common_fields()` (HTTP scheme) or `register_magic_firewall_fields()` (Magic Transit / Layer-4 scheme) in `src/scheme.rs`, then rebuild (`maturin develop`). `octorules-cloudflare` picks it up automatically. Python-only metadata (`requires_plan`, `is_response`) lives in that repo's `overlay.toml`.
 
 ### Adding functions
 
-Update `src/scheme.rs` — register in `register_common_functions()` and add the name to the `COMMON_FUNCTION_NAMES` array.
-
-Then in the [octorules-cloudflare](https://github.com/doctena-org/octorules-cloudflare) repo, run `python scripts/sync_schemas.py` to regenerate `schemas.json`. If the function needs `restricted_phases` or `requires_plan`, add it to `overlay.toml` in that repo first.
+Register the function in `register_common_functions()` in `src/scheme.rs` (and the `COMMON_FUNCTION_NAMES` list it's enumerated by), then rebuild. Function metadata (`restricted_phases`, `requires_plan`) lives in `octorules-cloudflare`'s `overlay.toml`.
 
 ## Design decisions
 
-- **Separate PyPI package.** The Rust build requires a toolchain and takes longer to compile. Users who want fast installs get `pip install octorules`; those who want authoritative parsing opt in with `pip install octorules[wirefilter]`.
+- **Separate PyPI package.** The Rust build needs a toolchain, so this ships as prebuilt per-platform wheels. Keeping it standalone lets `octorules-cloudflare` depend on a versioned, wheel-distributed artifact instead of vendoring Rust into the provider.
 - **Git dependency pinning.** `wirefilter-engine` is pinned to a specific commit because the required APIs (`SchemeBuilder`, function registration) are not in the published crates.io version.
 - **Stub function implementations.** Functions are registered with correct type signatures but no-op execution. Expressions parse and extract correctly; runtime evaluation is not supported.
 - **cdylib crate type.** Required by PyO3's extension-module feature for Python to load the native extension.
