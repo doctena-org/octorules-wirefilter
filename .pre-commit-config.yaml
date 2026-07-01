@@ -1,0 +1,32 @@
+# Managed by pre-commit (https://pre-commit.com). Install once: pre-commit install
+# Pinned hooks are the single source of truth for ruff/yamllint versions (not in
+# [dev]). cargo fmt/clippy run as local hooks against the system toolchain.
+# CI runs `pre-commit run --all-files`.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.19
+    hooks:
+      - id: ruff-check
+        files: ^tests/
+      - id: ruff-format
+        files: ^tests/
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        args: ["--no-warnings"]
+        files: ^\.github/workflows/.*\.ya?ml$
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --check
+        entry: cargo fmt --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --all-targets -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false

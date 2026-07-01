@@ -112,6 +112,26 @@ pub static SCHEME: LazyLock<Scheme> = LazyLock::new(|| {
     b.build()
 });
 
+/// Scheme for Cloudflare Magic Firewall / Network Firewall (Layer-4) phases.
+///
+/// Models packet-level fields (`ip.proto`, `tcp.flags`, ports, …) that the
+/// HTTP `SCHEME` does not. The FFI selects this scheme for the account-level
+/// Magic Transit phases (see `parse_expression`'s `scheme` argument).
+/// Source: <https://developers.cloudflare.com/ruleset-engine/rules-language/fields/magic-firewall/>
+pub static SCHEME_MAGIC: LazyLock<Scheme> = LazyLock::new(|| {
+    let mut b = SchemeBuilder::new();
+    register_magic_firewall_fields(&mut b);
+    register_common_functions(&mut b);
+
+    // Named-list support so `ip.src in $my_list` parses (existence/type
+    // validation is done by the Python linter, as for the HTTP scheme).
+    b.add_list(Type::Int, AlwaysList {}).unwrap();
+    b.add_list(Type::Ip, AlwaysList {}).unwrap();
+    b.add_list(Type::Bytes, AlwaysList {}).unwrap();
+
+    b.build()
+});
+
 /// Register common fields (everything except `http.request.uri.path`,
 /// which is added separately in the `SCHEME` static).
 fn register_common_fields(b: &mut SchemeBuilder) {
@@ -582,6 +602,51 @@ fn register_common_fields(b: &mut SchemeBuilder) {
     b.add_field("cf.zone.plan", Type::Bytes).unwrap();
 }
 
+/// Register the 33 Cloudflare Network Firewall (Magic Transit / Layer-4)
+/// fields. Used only by `SCHEME_MAGIC`.
+///
+/// Source: <https://developers.cloudflare.com/ruleset-engine/rules-language/fields/magic-firewall/>
+fn register_magic_firewall_fields(b: &mut SchemeBuilder) {
+    // IP addresses
+    b.add_field("ip.src", Type::Ip).unwrap();
+    b.add_field("ip.dst", Type::Ip).unwrap();
+    // Raw packet bytes (for use with bit_slice)
+    b.add_field("ip", Type::Bytes).unwrap();
+    b.add_field("tcp", Type::Bytes).unwrap();
+    b.add_field("udp", Type::Bytes).unwrap();
+    b.add_field("icmp", Type::Bytes).unwrap();
+    // String-valued (wirefilter Bytes)
+    b.add_field("ip.proto", Type::Bytes).unwrap();
+    b.add_field("ip.src.country", Type::Bytes).unwrap();
+    b.add_field("ip.dst.country", Type::Bytes).unwrap();
+    b.add_field("cf.colo.name", Type::Bytes).unwrap();
+    b.add_field("cf.colo.region", Type::Bytes).unwrap();
+    // Numeric
+    b.add_field("ip.len", Type::Int).unwrap();
+    b.add_field("ip.hdr_len", Type::Int).unwrap();
+    b.add_field("ip.ttl", Type::Int).unwrap();
+    b.add_field("ip.opt.type", Type::Int).unwrap();
+    b.add_field("ip.src.asnum", Type::Int).unwrap();
+    b.add_field("ip.dst.asnum", Type::Int).unwrap();
+    b.add_field("icmp.type", Type::Int).unwrap();
+    b.add_field("icmp.code", Type::Int).unwrap();
+    b.add_field("tcp.flags", Type::Int).unwrap();
+    b.add_field("tcp.srcport", Type::Int).unwrap();
+    b.add_field("tcp.dstport", Type::Int).unwrap();
+    b.add_field("udp.srcport", Type::Int).unwrap();
+    b.add_field("udp.dstport", Type::Int).unwrap();
+    // Boolean
+    b.add_field("sip", Type::Bool).unwrap();
+    b.add_field("tcp.flags.ack", Type::Bool).unwrap();
+    b.add_field("tcp.flags.cwr", Type::Bool).unwrap();
+    b.add_field("tcp.flags.ecn", Type::Bool).unwrap();
+    b.add_field("tcp.flags.fin", Type::Bool).unwrap();
+    b.add_field("tcp.flags.push", Type::Bool).unwrap();
+    b.add_field("tcp.flags.reset", Type::Bool).unwrap();
+    b.add_field("tcp.flags.syn", Type::Bool).unwrap();
+    b.add_field("tcp.flags.urg", Type::Bool).unwrap();
+}
+
 /// Register all 36 functions shared by both schemes.
 ///
 /// Source: <https://developers.cloudflare.com/ruleset-engine/rules-language/functions/>
@@ -892,68 +957,85 @@ fn register_common_functions(b: &mut SchemeBuilder) {
     }
 }
 
-/// Common field definitions as `(name, python_type)` tuples.
-///
-/// Does NOT include `http.request.uri.path` (added separately) or deprecated fields.
-pub fn common_field_defs() -> &'static [(&'static str, &'static str)] {
-    static FIELD_DEFS: LazyLock<Vec<(&'static str, &'static str)>> = LazyLock::new(|| {
-        // Map wirefilter Type → Python FieldType enum name by inspecting the
-        // default scheme.  We use a helper that walks the registered fields.
-        fn type_to_python(t: &Type) -> &'static str {
-            match t {
-                Type::Bytes => "STRING",
-                Type::Int => "INT",
-                Type::Bool => "BOOL",
-                Type::Ip => "IP",
-                Type::Array(inner) => {
-                    let inner_ty: Type = (*inner).into();
-                    match inner_ty {
-                        Type::Bytes => "ARRAY_STRING",
-                        Type::Int => "ARRAY_INT",
-                        Type::Array(inner2) => {
-                            let inner2_ty: Type = inner2.into();
-                            match inner2_ty {
-                                Type::Bytes => "ARRAY_ARRAY_STRING",
-                                other => {
-                                    panic!("unmapped Array(Array({other:?})) in type_to_python")
-                                }
-                            }
-                        }
-                        other => panic!("unmapped Array({other:?}) in type_to_python"),
+/// Map a wirefilter [`Type`] to the Python `FieldType` enum name.
+fn type_to_python(t: &Type) -> &'static str {
+    match t {
+        Type::Bytes => "STRING",
+        Type::Int => "INT",
+        Type::Bool => "BOOL",
+        Type::Ip => "IP",
+        Type::Array(inner) => {
+            let inner_ty: Type = (*inner).into();
+            match inner_ty {
+                Type::Bytes => "ARRAY_STRING",
+                Type::Int => "ARRAY_INT",
+                Type::Array(inner2) => {
+                    let inner2_ty: Type = inner2.into();
+                    match inner2_ty {
+                        Type::Bytes => "ARRAY_ARRAY_STRING",
+                        other => panic!("unmapped Array(Array({other:?})) in type_to_python"),
                     }
                 }
-                Type::Map(inner) => {
-                    let inner_ty: Type = (*inner).into();
-                    match inner_ty {
-                        // Wirefilter's Map keys are always strings; the
-                        // `Map<X>` shorthand maps to `MAP_STRING_<X>` on
-                        // the Python side.
-                        Type::Bytes => "MAP_STRING_STRING",
-                        Type::Int => "MAP_STRING_INT",
-                        Type::Array(inner2) => {
-                            let inner2_ty: Type = inner2.into();
-                            match inner2_ty {
-                                Type::Bytes => "MAP_ARRAY_STRING",
-                                Type::Int => "MAP_ARRAY_INT",
-                                other => panic!("unmapped Map(Array({other:?})) in type_to_python"),
-                            }
-                        }
-                        other => panic!("unmapped Map({other:?}) in type_to_python"),
-                    }
-                }
+                other => panic!("unmapped Array({other:?}) in type_to_python"),
             }
         }
+        Type::Map(inner) => {
+            let inner_ty: Type = (*inner).into();
+            match inner_ty {
+                // Wirefilter's Map keys are always strings; the `Map<X>`
+                // shorthand maps to `MAP_STRING_<X>` on the Python side.
+                Type::Bytes => "MAP_STRING_STRING",
+                Type::Int => "MAP_STRING_INT",
+                Type::Array(inner2) => {
+                    let inner2_ty: Type = inner2.into();
+                    match inner2_ty {
+                        Type::Bytes => "MAP_ARRAY_STRING",
+                        Type::Int => "MAP_ARRAY_INT",
+                        other => panic!("unmapped Map(Array({other:?})) in type_to_python"),
+                    }
+                }
+                other => panic!("unmapped Map({other:?}) in type_to_python"),
+            }
+        }
+    }
+}
 
-        COMMON_FIELD_NAMES
-            .iter()
-            .map(|name| {
-                let field = SCHEME
-                    .get_field(name)
-                    .unwrap_or_else(|_| panic!("COMMON_FIELD_NAMES entry {name:?} not in SCHEME"));
-                (*name, type_to_python(&field.get_type()))
-            })
-            .collect()
-    });
+/// Build `(name, python_type)` field defs by iterating a scheme, skipping any
+/// excluded names, sorted by name for deterministic output.
+///
+/// Iterating the scheme means there is no parallel name list to keep in sync —
+/// the `register_*_fields` functions are the single source of truth.
+fn scheme_field_defs(
+    scheme: &'static Scheme,
+    excluded: &[&str],
+) -> Vec<(&'static str, &'static str)> {
+    let mut defs: Vec<(&'static str, &'static str)> = scheme
+        .fields()
+        .filter(|f| !excluded.contains(&f.name()))
+        .map(|f| (f.name(), type_to_python(&f.get_type())))
+        .collect();
+    defs.sort_unstable();
+    defs
+}
+
+/// Common (HTTP) field definitions as `(name, python_type)` tuples.
+///
+/// Derived by iterating `SCHEME` minus [`COMMON_FIELD_EXCLUSIONS`].
+/// `register_common_fields` is the single source of truth for HTTP field names
+/// and types — there is no parallel inclusion list.
+pub fn common_field_defs() -> &'static [(&'static str, &'static str)] {
+    static FIELD_DEFS: LazyLock<Vec<(&'static str, &'static str)>> =
+        LazyLock::new(|| scheme_field_defs(&SCHEME, COMMON_FIELD_EXCLUSIONS));
+    &FIELD_DEFS
+}
+
+/// Magic Firewall (Layer-4) field definitions as `(name, python_type)` tuples.
+///
+/// Derived by iterating `SCHEME_MAGIC` directly. `register_magic_firewall_fields`
+/// is the single source of truth for L4 field names and types.
+pub fn magic_field_defs() -> &'static [(&'static str, &'static str)] {
+    static FIELD_DEFS: LazyLock<Vec<(&'static str, &'static str)>> =
+        LazyLock::new(|| scheme_field_defs(&SCHEME_MAGIC, &[]));
     &FIELD_DEFS
 }
 
@@ -962,178 +1044,22 @@ pub fn common_function_names() -> &'static [&'static str] {
     COMMON_FUNCTION_NAMES
 }
 
-/// Field names registered in `register_common_fields`, in registration order.
-/// Excludes `http.request.uri.path` (added separately) and deprecated/account fields.
-const COMMON_FIELD_NAMES: &[&str] = &[
-    "cf.api_gateway.auth_id_present",
-    "cf.api_gateway.fallthrough_detected",
-    "cf.api_gateway.request_violates_schema",
-    "cf.bot_management.corporate_proxy",
-    "cf.bot_management.detection_ids",
-    "cf.bot_management.ja3_hash",
-    "cf.bot_management.ja4",
-    "cf.bot_management.js_detection.passed",
-    "cf.bot_management.score",
-    "cf.bot_management.static_resource",
-    "cf.bot_management.verified_bot",
-    "cf.client.bot",
-    "cf.edge.client_tcp",
-    "cf.edge.l4.delivery_rate",
-    "cf.edge.server_ip",
-    "cf.edge.server_port",
-    "cf.hostname.metadata",
-    "cf.llm.prompt.custom_topic_categories",
-    "cf.llm.prompt.detected",
-    "cf.llm.prompt.injection_score",
-    "cf.llm.prompt.pii_categories",
-    "cf.llm.prompt.pii_detected",
-    "cf.llm.prompt.token_count",
-    "cf.llm.prompt.unsafe_topic_categories",
-    "cf.llm.prompt.unsafe_topic_detected",
-    "cf.random_seed",
-    "cf.ray_id",
-    "cf.response.1xxx_code",
-    "cf.response.error_type",
-    "cf.threat_score",
-    "cf.timings.client_quic_rtt_msec",
-    "cf.timings.client_tcp_rtt_msec",
-    "cf.timings.edge_msec",
-    "cf.timings.origin_ttfb_msec",
-    "cf.timings.worker_msec",
-    "cf.tls_cipher",
-    "cf.tls_ciphers_sha1",
-    "cf.tls_client_auth.cert_chain_rfc9440",
-    "cf.tls_client_auth.cert_chain_rfc9440_too_large",
-    "cf.tls_client_auth.cert_fingerprint_sha1",
-    "cf.tls_client_auth.cert_fingerprint_sha256",
-    "cf.tls_client_auth.cert_issuer_dn",
-    "cf.tls_client_auth.cert_issuer_dn_legacy",
-    "cf.tls_client_auth.cert_issuer_dn_rfc2253",
-    "cf.tls_client_auth.cert_issuer_serial",
-    "cf.tls_client_auth.cert_issuer_ski",
-    "cf.tls_client_auth.cert_not_after",
-    "cf.tls_client_auth.cert_not_before",
-    "cf.tls_client_auth.cert_presented",
-    "cf.tls_client_auth.cert_revoked",
-    "cf.tls_client_auth.cert_rfc9440",
-    "cf.tls_client_auth.cert_rfc9440_too_large",
-    "cf.tls_client_auth.cert_serial",
-    "cf.tls_client_auth.cert_ski",
-    "cf.tls_client_auth.cert_subject_dn",
-    "cf.tls_client_auth.cert_subject_dn_legacy",
-    "cf.tls_client_auth.cert_subject_dn_rfc2253",
-    "cf.tls_client_auth.cert_verified",
-    "cf.tls_client_extensions_sha1",
-    "cf.tls_client_extensions_sha1_le",
-    "cf.tls_client_hello_length",
-    "cf.tls_client_random",
-    "cf.tls_version",
-    "cf.verified_bot_category",
-    "cf.waf.auth_detected",
-    "cf.waf.content_scan.has_failed",
-    "cf.waf.content_scan.has_malicious_obj",
-    "cf.waf.content_scan.has_obj",
-    "cf.waf.content_scan.num_malicious_obj",
-    "cf.waf.content_scan.num_obj",
-    "cf.waf.content_scan.obj_results",
-    "cf.waf.content_scan.obj_sizes",
-    "cf.waf.content_scan.obj_types",
-    "cf.waf.credential_check.password_leaked",
-    "cf.waf.credential_check.username_and_password_leaked",
-    "cf.waf.credential_check.username_leaked",
-    "cf.waf.credential_check.username_password_similar",
-    "cf.waf.score",
-    "cf.waf.score.class",
-    "cf.waf.score.rce",
-    "cf.waf.score.sqli",
-    "cf.waf.score.xss",
-    "cf.worker.upstream_zone",
-    "http.cookie",
-    "http.host",
-    "http.referer",
-    "http.request.accepted_languages",
-    "http.request.body.form",
-    "http.request.body.form.names",
-    "http.request.body.form.values",
-    "http.request.body.mime",
-    "http.request.body.multipart",
-    "http.request.body.multipart.content_dispositions",
-    "http.request.body.multipart.content_transfer_encodings",
-    "http.request.body.multipart.content_types",
-    "http.request.body.multipart.filenames",
-    "http.request.body.multipart.names",
-    "http.request.body.multipart.values",
-    "http.request.body.raw",
-    "http.request.body.size",
-    "http.request.body.truncated",
-    "http.request.cookies",
-    "http.request.full_uri",
-    "http.request.headers",
-    "http.request.headers.names",
-    "http.request.headers.truncated",
-    "http.request.headers.values",
-    "http.request.jwt.claims.aud",
-    "http.request.jwt.claims.aud.names",
-    "http.request.jwt.claims.aud.values",
-    "http.request.jwt.claims.iat.sec",
-    "http.request.jwt.claims.iat.sec.names",
-    "http.request.jwt.claims.iat.sec.values",
-    "http.request.jwt.claims.iss",
-    "http.request.jwt.claims.iss.names",
-    "http.request.jwt.claims.iss.values",
-    "http.request.jwt.claims.jti",
-    "http.request.jwt.claims.jti.names",
-    "http.request.jwt.claims.jti.values",
-    "http.request.jwt.claims.nbf.sec",
-    "http.request.jwt.claims.nbf.sec.names",
-    "http.request.jwt.claims.nbf.sec.values",
-    "http.request.jwt.claims.sub",
-    "http.request.jwt.claims.sub.names",
-    "http.request.jwt.claims.sub.values",
-    "http.request.method",
-    "http.request.timestamp.msec",
-    "http.request.timestamp.sec",
-    "http.request.uri",
-    "http.request.uri.args",
-    "http.request.uri.args.names",
-    "http.request.uri.args.values",
-    "http.request.uri.path.extension",
-    "http.request.uri.query",
-    "http.request.version",
-    "http.response.code",
-    "http.response.content_type.media_type",
-    "http.response.headers",
-    "http.response.headers.names",
-    "http.response.headers.values",
-    "http.user_agent",
-    "http.x_forwarded_for",
-    "ip.src",
-    "ip.src.asnum",
-    "ip.src.city",
-    "ip.src.continent",
-    "ip.src.country",
-    "ip.src.is_in_european_union",
-    "ip.src.lat",
-    "ip.src.lon",
-    "ip.src.metro_code",
-    "ip.src.postal_code",
-    "ip.src.region",
-    "ip.src.region_code",
-    "ip.src.subdivision_1_iso_code",
-    "ip.src.subdivision_2_iso_code",
-    "ip.src.timezone.name",
-    "raw.http.request.full_uri",
-    "raw.http.request.uri",
-    "raw.http.request.uri.args",
-    "raw.http.request.uri.args.names",
-    "raw.http.request.uri.args.values",
-    "raw.http.request.uri.path",
-    "raw.http.request.uri.path.extension",
-    "raw.http.request.uri.query",
-    "raw.http.response.headers",
-    "raw.http.response.headers.names",
-    "raw.http.response.headers.values",
-    "ssl",
+/// HTTP-scheme fields intentionally NOT exposed via `get_schema_info()`:
+/// `http.request.uri.path` (dual field/function, registered separately) plus
+/// the geoip/zone alias fields, which the Python field registry supplies with
+/// its own metadata. `common_field_defs()` iterates `SCHEME` minus this set, so
+/// `register_common_fields` stays the single source of truth (no parallel
+/// inclusion list to keep in sync).
+const COMMON_FIELD_EXCLUSIONS: &[&str] = &[
+    "http.request.uri.path",
+    "cf.zone.name",
+    "cf.zone.plan",
+    "ip.geoip.asnum",
+    "ip.geoip.continent",
+    "ip.geoip.country",
+    "ip.geoip.subdivision_1_iso_code",
+    "ip.geoip.subdivision_2_iso_code",
+    "ip.geoip.is_in_european_union",
 ];
 
 /// Function names registered in the scheme.
@@ -1190,11 +1116,15 @@ mod tests {
     }
 
     #[test]
-    fn common_field_names_array_length() {
-        // COMMON_FIELD_NAMES is the subset exposed via get_schema_info().
-        // 169 names + http.request.uri.path + cf.zone.{name,plan} +
-        // 6 ip.geoip.* aliases = 178 total scheme fields.
-        assert_eq!(COMMON_FIELD_NAMES.len(), 169);
+    fn common_field_defs_count() {
+        // get_schema_info() exposes SCHEME minus the 9 excluded dual/alias
+        // fields (supplied by the Python field registry instead):
+        // 178 - 9 = 169.
+        assert_eq!(common_field_defs().len(), 169);
+        assert_eq!(
+            common_field_defs().len(),
+            SCHEME.field_count() - COMMON_FIELD_EXCLUSIONS.len()
+        );
     }
 
     #[test]
@@ -1239,6 +1169,70 @@ mod tests {
                 "2026 CF field {name:?} not registered"
             );
         }
+    }
+
+    // ── SCHEME_MAGIC (Magic Transit / Layer-4) tests ──────────
+
+    #[test]
+    fn magic_scheme_has_l4_fields() {
+        for name in [
+            "ip.proto",
+            "tcp.flags",
+            "tcp.flags.syn",
+            "tcp.dstport",
+            "udp.dstport",
+            "icmp.type",
+        ] {
+            assert!(
+                SCHEME_MAGIC.get_field(name).is_ok(),
+                "Magic Firewall field {name:?} not registered in SCHEME_MAGIC"
+            );
+        }
+    }
+
+    #[test]
+    fn magic_scheme_field_count() {
+        assert_eq!(SCHEME_MAGIC.field_count(), 33);
+    }
+
+    #[test]
+    fn magic_field_defs_derived_from_scheme() {
+        // magic_field_defs() iterates SCHEME_MAGIC directly, so it must match
+        // the scheme's field count and report correct Python types.
+        let defs = magic_field_defs();
+        assert_eq!(defs.len(), 33);
+        let by_name: std::collections::HashMap<_, _> = defs.iter().copied().collect();
+        assert_eq!(by_name.get("ip.proto"), Some(&"STRING"));
+        assert_eq!(by_name.get("tcp.dstport"), Some(&"INT"));
+        assert_eq!(by_name.get("tcp.flags.syn"), Some(&"BOOL"));
+        assert_eq!(by_name.get("ip.src"), Some(&"IP"));
+    }
+
+    #[test]
+    fn magic_scheme_parses_l4_expression() {
+        assert!(
+            SCHEME_MAGIC
+                .parse(r#"ip.proto eq "tcp" && tcp.dstport in {22 3389}"#)
+                .is_ok()
+        );
+        assert!(
+            SCHEME_MAGIC
+                .parse("tcp.flags.syn && not tcp.flags.ack")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn magic_scheme_rejects_http_fields() {
+        // The L4 scheme must not accept HTTP fields — per-phase precision.
+        assert!(SCHEME_MAGIC.parse(r#"http.host eq "example.com""#).is_err());
+    }
+
+    #[test]
+    fn http_scheme_rejects_l4_fields() {
+        // The HTTP scheme is unchanged — L4 fields remain unknown there.
+        assert!(SCHEME.parse(r#"ip.proto eq "tcp""#).is_err());
+        assert!(SCHEME.parse("tcp.flags.syn").is_err());
     }
 
     #[test]
@@ -1337,11 +1331,17 @@ mod tests {
     // ── Sync checks: COMMON_*_NAMES match registered scheme ──
 
     #[test]
-    fn all_common_fields_exist_in_scheme() {
-        for name in COMMON_FIELD_NAMES {
+    fn common_field_exclusions_are_real_and_excluded() {
+        let exposed: std::collections::HashSet<_> =
+            common_field_defs().iter().map(|(n, _)| *n).collect();
+        for name in COMMON_FIELD_EXCLUSIONS {
             assert!(
                 SCHEME.get_field(name).is_ok(),
-                "COMMON_FIELD_NAMES contains {name:?} but it's not registered in SCHEME"
+                "exclusion {name:?} is not a real SCHEME field"
+            );
+            assert!(
+                !exposed.contains(name),
+                "exclusion {name:?} must not be exposed by common_field_defs()"
             );
         }
     }
@@ -1359,14 +1359,8 @@ mod tests {
     // ── type_to_python covers all registered fields ──
 
     #[test]
-    fn common_field_defs_covers_all_common_fields() {
-        let defs = common_field_defs();
-        assert_eq!(
-            defs.len(),
-            COMMON_FIELD_NAMES.len(),
-            "common_field_defs() count doesn't match COMMON_FIELD_NAMES"
-        );
-        for &(name, py_type) in defs {
+    fn common_field_defs_have_types() {
+        for &(name, py_type) in common_field_defs() {
             assert!(
                 !py_type.is_empty(),
                 "type_to_python returned empty for field {name:?}"
