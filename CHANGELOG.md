@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-07-26
+
+### Added
+- `octorules_wirefilter.pyi` type stub ships in the wheel — IDE signatures and result-shape documentation for `parse_expression` and `get_schema_info`.
+
 ## [0.5.0] - 2026-07-01
 
 ### Added

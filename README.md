@@ -86,7 +86,9 @@ Tests skip gracefully if the native extension is not installed.
 
 ## API
 
-This package exposes two functions:
+This package exposes two functions. A type stub
+(`octorules_wirefilter.pyi`) ships in the wheel, so IDEs surface the
+signatures and result shapes documented below.
 
 ### `parse_expression(expr, scheme=None)`
 
@@ -107,7 +109,7 @@ result = parse_expression('bogus_field eq "x"')
 ```
 
 **Returns** a dict with keys `fields`, `functions`, `operators`, `string_literals`, `regex_literals`, `ip_literals`, `int_literals`, `regex_field_pairs` (all lists), plus:
-- On success: lists populated with extracted values. `regex_field_pairs` holds `[field, regex]` pairs showing which field each regex is matched against (e.g. `[["http.request.uri.path", "^/api"]]`). If AST nesting exceeded the depth limit, `depth_exceeded: true` is included.
+- On success: lists populated with extracted values. `regex_field_pairs` is a list of two-element lists `[[field, regex], ...]` showing which field each regex is matched against (e.g. `[["http.request.uri.path", "^/api"]]`); this shape is frozen and consumers may convert to tuples if desired. If AST nesting exceeded the depth limit, `depth_exceeded: true` is included.
 - On failure: `error` (string) with all list keys present but empty.
 
 Expressions exceeding 1 MiB are rejected with an error dict before parsing.
