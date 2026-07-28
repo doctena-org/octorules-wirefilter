@@ -1,5 +1,9 @@
 ---
 extends: default
+# Vendored crates ship their own CI YAML.  It is not ours to fix, so a future
+# `cargo vendor` refresh must not be able to fail our lint on it.
+ignore: |
+  vendor/
 rules:
   line-length:
     max: 120

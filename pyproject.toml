@@ -43,6 +43,11 @@ features = ["pyo3/extension-module"]
 [tool.ruff]
 target-version = "py310"
 line-length = 100
+# Vendored upstream sources stay byte-identical to their release tarballs, so
+# they are not ours to reformat.  pre-commit scopes ruff to tests/, but a bare
+# `ruff format .` at the repo root would rewrite ~200 vendored pyo3 files
+# without this.
+extend-exclude = ["vendor"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B", "RUF"]
