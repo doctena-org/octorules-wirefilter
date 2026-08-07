@@ -23,7 +23,9 @@ def parse_expression(expr: str, scheme: str | None = None) -> dict[str, Any]:
       - `error` (optional): error message (string) if parsing failed. Present
         with all list keys as empty lists.
       - `depth_exceeded` (optional): boolean `true` if AST nesting exceeded the
-        depth limit (100 levels).
+        extraction walk limit (100 levels). Expressions nested deeper than 128
+        levels do not reach extraction: the engine rejects them at parse time
+        and `error` is set instead.
 
     On success: all list keys are populated with extracted values.
     On failure: `error` key is present with all list keys as empty lists.

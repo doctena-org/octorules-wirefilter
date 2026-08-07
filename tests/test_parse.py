@@ -639,6 +639,14 @@ class TestInputLimits:
         assert "error" not in result, f"unexpected error: {result.get('error')}"
         assert result.get("depth_exceeded") is True
 
+    def test_nesting_boundary_is_exactly_128(self):
+        """128 parses, 129 fails — the boundary itself is the regression
+        tripwire for an upstream default change."""
+        ok = "(" * 128 + "ssl" + ")" * 128
+        bad = "(" * 129 + "ssl" + ")" * 129
+        assert "error" not in parse_expression(ok)
+        assert "maximum nesting depth exceeded" in parse_expression(bad).get("error", "")
+
     def test_engine_rejects_nesting_beyond_128(self):
         """The engine enforces its own nesting limit at parse time
         (upstream 02741bcb) — the same rejection Cloudflare's edge gives,
