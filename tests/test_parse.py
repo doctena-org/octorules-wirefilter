@@ -963,3 +963,18 @@ class TestQuantifiersInParseOutput:
         assert "error" not in result, result.get("error")
         assert "any" in result["functions"]
         assert "split" in result["functions"]
+
+    def test_quantifier_arg_must_be_boolean_array(self):
+        """The quantifier arg is typed: a plain Bool comparison is rejected
+        with a precise error, as on the edge."""
+        result = parse_expression('any(http.request.uri.path == "/x")')
+        assert "expected value of type Array<Bool>, but got Bool" in result.get("error", "")
+
+    def test_quantifier_rejects_combining_operators_inside(self):
+        """The engine accepts exactly one mapped comparison inside any()/all();
+        combining with || is a parse error. Pinned so an upstream change in
+        either direction shows up here instead of in CF lint behaviour."""
+        result = parse_expression(
+            'any(http.request.headers.names[*] == "x" || http.request.headers.names[*] == "y")'
+        )
+        assert "error" in result
