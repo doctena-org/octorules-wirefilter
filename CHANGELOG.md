@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- wirefilter-engine updated to upstream `ec8e24e` (2026-07-27). Expressions nested deeper than 128 levels now fail to parse, matching Cloudflare's parser; `any()`/`all()` are handled natively by the engine. Parse output and `get_schema_info()` are unchanged.
 - Vendored `rand` updated from 0.9.3 to 0.9.5.
 
 ## [0.5.1] - 2026-07-26

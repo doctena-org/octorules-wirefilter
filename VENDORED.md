@@ -8,10 +8,14 @@
 
 **Exact pin:**
 ```toml
-wirefilter-engine = { git = "https://github.com/cloudflare/wirefilter", rev = "6621924baf36f8ba7f603433dbe6f857ad3d5589" }
+wirefilter-engine = { git = "https://github.com/cloudflare/wirefilter", rev = "ec8e24e26e2707a88034bfe161beeb2a4f51f8df", default-features = false, features = ["regex"] }
 ```
 
-**Commit:** `6621924baf36f8ba7f603433dbe6f857ad3d5589`
+**Commit:** `ec8e24e26e2707a88034bfe161beeb2a4f51f8df` (upstream master, 2026-07-27)
+
+**Features:** `default-features = false` skips `get-size2` (LhsValue memory
+accounting — an execution-side concern; this crate only parses). `regex`
+stays on: the scheme has regex-typed fields and `matches()` support.
 
 ## Update Procedure
 
@@ -26,7 +30,7 @@ To update the wirefilter-engine pin to a newer commit:
    ```
 3. Run the full integration test suite (includes field-count assertions):
    ```bash
-   # Verify 169 HTTP fields and 36 functions
+   # Verify 169 HTTP fields and 36 callable functions (34 registered + native any/all)
    # Verify 33 Magic Transit (Layer-4) fields
    pytest tests/
    ```

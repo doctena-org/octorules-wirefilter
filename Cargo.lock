@@ -425,7 +425,7 @@ checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 [[package]]
 name = "wirefilter-engine"
 version = "0.7.0"
-source = "git+https://github.com/cloudflare/wirefilter?rev=6621924baf36f8ba7f603433dbe6f857ad3d5589#6621924baf36f8ba7f603433dbe6f857ad3d5589"
+source = "git+https://github.com/cloudflare/wirefilter?rev=ec8e24e26e2707a88034bfe161beeb2a4f51f8df#ec8e24e26e2707a88034bfe161beeb2a4f51f8df"
 dependencies = [
  "backtrace",
  "cfg-if",

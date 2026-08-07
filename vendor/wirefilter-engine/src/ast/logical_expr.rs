@@ -1,11 +1,13 @@
 use super::Expr;
 use super::field_expr::ComparisonExpr;
+use super::function_expr::FunctionCallArgExpr;
+use super::index_expr::IndexExpr;
 use super::parse::FilterParser;
 use super::visitor::{Visitor, VisitorMut};
 use crate::compiler::Compiler;
 use crate::filter::{CompiledExpr, CompiledOneExpr, CompiledVecExpr};
-use crate::lex::{Lex, LexErrorKind, LexResult, LexWith, expect, skip_space};
-use crate::types::{GetType, Type, TypeMismatchError};
+use crate::lex::{Lex, LexErrorKind, LexResult, LexWith, expect, skip_space, span};
+use crate::types::{GetType, LhsValue, Type, TypeMismatchError};
 use serde::Serialize;
 
 lex_enum!(
@@ -29,12 +31,124 @@ lex_enum!(
     }
 );
 
+lex_enum!(
+    /// An operator that reduces an array of boolean values to a single boolean.
+    ///
+    /// Quantifier operators are parsed from `any(...)` and `all(...)`
+    /// expressions and can reduce mapped comparisons such as
+    /// `any(headers[*] == "x")`.
+    QuantifierOp {
+        /// Returns `true` when at least one input value is `true`.
+        "any" => Any,
+        /// Returns `true` when every input value is `true`.
+        "all" => All,
+    }
+);
+
+impl QuantifierOp {
+    pub(crate) fn lex_call(input: &str) -> Option<(Self, &str)> {
+        let (op, rest) = Self::lex(input).ok()?;
+        if expect(skip_space(rest), "(").is_ok() {
+            Some((op, rest))
+        } else {
+            None
+        }
+    }
+
+    fn reduce_bool_iter(self, values: impl IntoIterator<Item = bool>) -> bool {
+        match self {
+            Self::Any => values.into_iter().any(|value| value),
+            Self::All => values.into_iter().all(|value| value),
+        }
+    }
+
+    fn reduce_lhs_array(self, array: crate::lhs_types::Array<'_>) -> bool {
+        self.reduce_bool_iter(array.into_iter().map(|lhs| bool::try_from(lhs).unwrap()))
+    }
+}
+
 /// A parenthesized expression.
 #[derive(Debug, PartialEq, Eq, Clone, Hash, Serialize)]
 #[serde(transparent)]
 pub struct ParenthesizedExpr {
     /// The inner expression.
     pub expr: LogicalExpr,
+}
+
+/// The argument to an `any(...)` or `all(...)` quantifier expression.
+///
+/// The argument must have type `Array(Bool)`. It can be either a direct
+/// boolean array field or a logical expression that produces a boolean array
+/// through map-each indexing, such as `headers[*] contains "cookie"`.
+#[derive(Debug, PartialEq, Eq, Clone, Hash, Serialize)]
+#[serde(tag = "kind", content = "value")]
+pub enum QuantifierArgExpr {
+    /// A value expression which evaluates to an `Array(Bool)`.
+    IndexExpr(IndexExpr),
+    /// A logical expression which evaluates to an `Array(Bool)`.
+    #[serde(rename = "SimpleExpr")]
+    Logical(LogicalExpr),
+}
+
+fn bool_array_type() -> Type {
+    Type::Array(Type::Bool.into())
+}
+
+impl QuantifierArgExpr {
+    pub(crate) fn walk<'a, V: Visitor<'a>>(&'a self, visitor: &mut V) {
+        match self {
+            Self::IndexExpr(index_expr) => visitor.visit_index_expr(index_expr),
+            Self::Logical(logical_expr) => visitor.visit_logical_expr(logical_expr),
+        }
+    }
+
+    pub(crate) fn walk_mut<'a, V: VisitorMut<'a>>(&'a mut self, visitor: &mut V) {
+        match self {
+            Self::IndexExpr(index_expr) => visitor.visit_index_expr(index_expr),
+            Self::Logical(logical_expr) => visitor.visit_logical_expr(logical_expr),
+        }
+    }
+}
+
+impl GetType for QuantifierArgExpr {
+    fn get_type(&self) -> Type {
+        match self {
+            Self::IndexExpr(index_expr) => index_expr.get_type(),
+            Self::Logical(logical_expr) => logical_expr.get_type(),
+        }
+    }
+}
+
+impl<'i, 's> LexWith<'i, &FilterParser<'s>> for QuantifierArgExpr {
+    fn lex_with(input: &'i str, parser: &FilterParser<'s>) -> LexResult<'i, Self> {
+        let (arg, rest) = FunctionCallArgExpr::lex_with(input, parser)?;
+        let arg = match arg {
+            FunctionCallArgExpr::IndexExpr(index_expr) => Self::IndexExpr(index_expr),
+            FunctionCallArgExpr::Logical(logical_expr) => Self::Logical(logical_expr),
+            FunctionCallArgExpr::Literal(literal) => {
+                return Err((
+                    LexErrorKind::TypeMismatch(TypeMismatchError {
+                        expected: bool_array_type().into(),
+                        actual: literal.get_type(),
+                    }),
+                    span(input, rest),
+                ));
+            }
+        };
+
+        let actual = arg.get_type();
+        if actual == bool_array_type() {
+            Ok((arg, rest))
+        } else {
+            Err((
+                LexErrorKind::TypeMismatch(TypeMismatchError {
+                    expected: bool_array_type().into(),
+                    actual,
+                }),
+                span(input, rest),
+            ))
+        }
+    }
 }
 
 /// LogicalExpr is a either a generic sub-expression
@@ -60,6 +174,16 @@ pub enum LogicalExpr {
         /// Sub-expression.
         arg: Box<LogicalExpr>,
     },
+    /// An `any(...)` or `all(...)` expression.
+    ///
+    /// Quantifier expressions reduce an `Array(Bool)` argument to a single
+    /// `Bool` value.
+    Quantifier {
+        /// The quantifier operator to apply.
+        op: QuantifierOp,
+        /// The boolean array expression to reduce.
+        arg: Box<QuantifierArgExpr>,
+    },
 }
 
 impl GetType for LogicalExpr {
@@ -69,6 +193,7 @@ impl GetType for LogicalExpr {
             LogicalExpr::Comparison(comparison) => comparison.get_type(),
             LogicalExpr::Parenthesized(parenthesized) => parenthesized.expr.get_type(),
             LogicalExpr::Unary { arg, .. } => arg.get_type(),
+            LogicalExpr::Quantifier { .. } => Type::Bool,
         }
     }
 }
@@ -81,19 +206,41 @@ impl LogicalExpr {
         }
     }
 
-    fn lex_simple_expr<'i>(input: &'i str, parser: &FilterParser<'_>) -> LexResult<'i, Self> {
-        Ok(if let Ok(input) = expect(input, "(") {
+    pub(crate) fn lex_quantifier<'i>(
+        input: &'i str,
+        parser: &FilterParser<'_>,
+    ) -> Option<LexResult<'i, (QuantifierOp, Box<QuantifierArgExpr>)>> {
+        let (op, rest) = QuantifierOp::lex_call(input)?;
+        let nested_parser = match parser.with_increased_nesting(skip_space(rest)) {
+            Ok(parser) => parser,
+            Err(err) => return Some(Err(err)),
+        };
+        Some((|| {
+            let input = skip_space(rest);
+            let input = expect(input, "(")?;
             let input = skip_space(input);
-            let (expr, input) = LogicalExpr::lex_with(input, parser)?;
+            let (arg, input) = QuantifierArgExpr::lex_with(input, &nested_parser)?;
+            let input = skip_space(input);
+            let input = expect(input, ")")?;
+            Ok(((op, Box::new(arg)), input))
+        })())
+    }
+
+    fn lex_simple_expr<'i>(input: &'i str, parser: &FilterParser<'_>) -> LexResult<'i, Self> {
+        Ok(if let Ok(rest) = expect(input, "(") {
+            let nested_parser = parser.with_increased_nesting(input)?;
+            let input = skip_space(rest);
+            let (expr, input) = LogicalExpr::lex_with(input, &nested_parser)?;
             let input = skip_space(input);
             let input = expect(input, ")")?;
             (
                 LogicalExpr::Parenthesized(Box::new(ParenthesizedExpr { expr })),
                 input,
             )
-        } else if let Ok((op, input)) = UnaryOp::lex(input) {
-            let input = skip_space(input);
-            let (arg, input) = Self::lex_simple_expr(input, parser)?;
+        } else if let Ok((op, rest)) = UnaryOp::lex(input) {
+            let nested_parser = parser.with_increased_nesting(input)?;
+            let input = skip_space(rest);
+            let (arg, input) = Self::lex_simple_expr(input, &nested_parser)?;
             (
                 LogicalExpr::Unary {
                     op,
@@ -101,6 +248,9 @@ impl LogicalExpr {
                 },
                 input,
             )
+        } else if let Some(result) = Self::lex_quantifier(input, parser) {
+            let ((op, arg), input) = result?;
+            (LogicalExpr::Quantifier { op, arg }, input)
         } else {
             let (op, input) = ComparisonExpr::lex_with(input, parser)?;
             (LogicalExpr::Comparison(op), input)
@@ -188,6 +338,7 @@ impl Expr for LogicalExpr {
             LogicalExpr::Comparison(node) => visitor.visit_comparison_expr(node),
             LogicalExpr::Parenthesized(node) => visitor.visit_logical_expr(&node.expr),
             LogicalExpr::Unary { arg, .. } => visitor.visit_logical_expr(arg),
+            LogicalExpr::Quantifier { arg, .. } => arg.walk(visitor),
             LogicalExpr::Combining { items, .. } => {
                 items
                     .iter()
@@ -202,6 +353,7 @@ impl Expr for LogicalExpr {
             LogicalExpr::Comparison(node) => visitor.visit_comparison_expr(node),
             LogicalExpr::Parenthesized(node) => visitor.visit_logical_expr(&mut node.expr),
             LogicalExpr::Unary { arg, .. } => visitor.visit_logical_expr(arg),
+            LogicalExpr::Quantifier { arg, .. } => arg.walk_mut(visitor),
             LogicalExpr::Combining { items, .. } => {
                 items
                     .iter_mut()
@@ -228,6 +380,27 @@ impl Expr for LogicalExpr {
                     })),
                 }
             }
+            LogicalExpr::Quantifier { op, arg } => match *arg {
+                QuantifierArgExpr::IndexExpr(index_expr) => {
+                    let arg = compiler.compile_index_expr(index_expr);
+                    CompiledExpr::One(CompiledOneExpr::new(move |ctx| match arg.execute(ctx) {
+                        Ok(LhsValue::Array(array)) => op.reduce_lhs_array(array),
+                        Err(_) => false,
+                        Ok(_) => unreachable!(),
+                    }))
+                }
+                QuantifierArgExpr::Logical(logical_expr) => {
+                    let arg = compiler.compile_logical_expr(logical_expr);
+                    match arg {
+                        CompiledExpr::One(_) => unreachable!(),
+                        CompiledExpr::Vec(vec) => {
+                            CompiledExpr::One(CompiledOneExpr::new(move |ctx| {
+                                op.reduce_bool_iter(vec.execute(ctx).iter().copied())
+                            }))
+                        }
+                    }
+                }
+            },
             LogicalExpr::Combining { op, items } => {
                 let items = items.into_iter();
                 let mut items = items.map(|item| compiler.compile_logical_expr(item));
@@ -326,7 +499,7 @@ fn test() {
     use crate::ast::index_expr::IndexExpr;
     use crate::execution_context::ExecutionContext;
     use crate::lex::complete;
-    use crate::lhs_types::Array;
+    use crate::lhs_types::{Array, Map};
     use crate::scheme::FieldIndex;
     use crate::types::Type;
 
@@ -336,6 +509,9 @@ fn test() {
         at: Array(Bool),
         af: Array(Bool),
         aat: Array(Array(Bool)),
+        empty_bool_array: Array(Bool),
+        map_bool_array: Map(Array(Bool)),
+        map_bytes_array: Map(Array(Bytes)),
     }
     .build();
 
@@ -374,6 +550,21 @@ fn test() {
     ctx.set_field_value(scheme.get_field("af").unwrap(), {
         Array::from_iter([false, false, true])
     })
+    .unwrap();
+    ctx.set_field_value(
+        scheme.get_field("empty_bool_array").unwrap(),
+        Array::new(Type::Bool),
+    )
+    .unwrap();
+    ctx.set_field_value(
+        scheme.get_field("map_bool_array").unwrap(),
+        Map::new(Type::Array(Type::Bool.into())),
+    )
+    .unwrap();
+    ctx.set_field_value(
+        scheme.get_field("map_bytes_array").unwrap(),
+        Map::new(Type::Array(Type::Bytes.into())),
+    )
     .unwrap();
 
     {
@@ -546,6 +737,46 @@ fn test() {
                     ],
                 },
                 t_expr(),
+            ],
+        }
+    );
+
+    assert_ok!(
+        FilterParser::new(scheme).lex_as("t and (t or t)"),
+        LogicalExpr::Combining {
+            op: LogicalOp::And,
+            items: vec![
+                t_expr(),
+                LogicalExpr::Parenthesized(Box::new(ParenthesizedExpr {
+                    expr: LogicalExpr::Combining {
+                        op: LogicalOp::Or,
+                        items: vec![t_expr(), t_expr()],
+                    },
+                })),
+            ],
+        }
+    );
+
+    assert_ok!(
+        FilterParser::new(scheme).lex_as("t and (t or (t and t))"),
+        LogicalExpr::Combining {
+            op: LogicalOp::And,
+            items: vec![
+                t_expr(),
+                LogicalExpr::Parenthesized(Box::new(ParenthesizedExpr {
+                    expr: LogicalExpr::Combining {
+                        op: LogicalOp::Or,
+                        items: vec![
+                            t_expr(),
+                            LogicalExpr::Parenthesized(Box::new(ParenthesizedExpr {
+                                expr: LogicalExpr::Combining {
+                                    op: LogicalOp::And,
+                                    items: vec![t_expr(), t_expr()],
+                                },
+                            })),
+                        ],
+                    },
+                })),
             ],
         }
     );
@@ -878,6 +1109,70 @@ fn test() {
         FilterParser::new(scheme).lex_as("! (not !at)"),
         not_expr(parenthesized_expr(not_expr(not_expr(at_expr()))))
     );
+
+    {
+        let execute = |input| scheme.parse(input).unwrap().compile().execute(ctx).unwrap();
+
+        assert_eq!(execute("any(at)"), true);
+        assert_eq!(execute("all(at)"), false);
+        assert_eq!(execute("any(empty_bool_array)"), false);
+        assert_eq!(execute("all(empty_bool_array)"), true);
+        assert_eq!(execute(r#"any(map_bool_array["missing"])"#), false);
+        assert_eq!(execute(r#"all(map_bool_array["missing"])"#), false);
+        assert_eq!(
+            execute(r#"any(map_bytes_array["missing"][*] matches "bar")"#),
+            false
+        );
+        assert_eq!(
+            execute(r#"all(map_bytes_array["missing"][*] matches "bar")"#),
+            true
+        );
+
+        assert_err!(
+            FilterParser::new(scheme).lex_as::<LogicalExpr>("any(t)"),
+            LexErrorKind::TypeMismatch(TypeMismatchError {
+                expected: Type::Array(Type::Bool.into()).into(),
+                actual: Type::Bool,
+            }),
+            "t"
+        );
+    }
+
+    {
+        let mut parser = FilterParser::new(scheme);
+        parser.set_max_nesting_depth(1);
+        assert_err!(
+            parser.lex_as::<LogicalExpr>("((t))"),
+            LexErrorKind::NestingLimitExceeded { limit: 1 },
+            "(t))"
+        );
+    }
+
+    {
+        let mut parser = FilterParser::new(scheme);
+        parser.set_max_nesting_depth(1);
+        assert_err!(
+            parser.lex_as::<LogicalExpr>("!!t"),
+            LexErrorKind::NestingLimitExceeded { limit: 1 },
+            "!t"
+        );
+    }
+
+    {
+        let mut parser = FilterParser::new(scheme);
+        parser.set_max_nesting_depth(2);
+        assert_ok!(parser.lex_as("!!t"), not_expr(not_expr(t_expr())));
+    }
+
+    {
+        let mut parser = FilterParser::new(scheme);
+        parser.set_max_nesting_depth(0);
+        assert_err!(
+            parser.lex_as::<LogicalExpr>("t and (t or t)"),
+            LexErrorKind::NestingLimitExceeded { limit: 0 },
+            "(t or t)"
+        );
+    }
 
     {
         let expr = assert_ok!(

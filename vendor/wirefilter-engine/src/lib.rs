@@ -84,10 +84,12 @@ pub use self::ast::field_expr::{
 };
 pub use self::ast::function_expr::{FunctionCallArgExpr, FunctionCallExpr};
 pub use self::ast::index_expr::{Compare, IndexExpr};
-pub use self::ast::logical_expr::{LogicalExpr, LogicalOp, ParenthesizedExpr, UnaryOp};
+pub use self::ast::logical_expr::{
+    LogicalExpr, LogicalOp, ParenthesizedExpr, QuantifierArgExpr, QuantifierOp, UnaryOp,
+};
 pub use self::ast::parse::{FilterParser, ParseError, ParserSettings};
 pub use self::ast::visitor::{Visitor, VisitorMut};
-pub use self::ast::{Expr, FilterAst, FilterValueAst, ValueExpr};
+pub use self::ast::{Expr, FilterAst, FilterValueAst, FilterValueExpr, ValueExpr};
 pub use self::compiler::{Compiler, DefaultCompiler};
 pub use self::execution_context::{
     ExecutionContext, ExecutionContextGuard, InvalidListMatcherError, SetFieldValueError,
@@ -96,7 +98,7 @@ pub use self::filter::{
     CompiledExpr, CompiledOneExpr, CompiledValueExpr, CompiledVecExpr, Filter, FilterValue,
 };
 pub use self::functions::{
-    AllFunction, AnyFunction, ConcatFunction, FunctionArgInvalidConstantError, FunctionArgKind,
+    CompiledFunction, ConcatFunction, FunctionArgInvalidConstantError, FunctionArgKind,
     FunctionArgKindMismatchError, FunctionArgs, FunctionDefinition, FunctionDefinitionContext,
     FunctionParam, FunctionParamError, SimpleFunctionArgKind, SimpleFunctionDefinition,
     SimpleFunctionImpl, SimpleFunctionOptParam, SimpleFunctionParam,

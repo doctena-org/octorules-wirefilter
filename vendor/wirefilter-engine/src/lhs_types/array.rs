@@ -4,6 +4,8 @@ use crate::lhs_types::AsRefIterator;
 use crate::types::{
     CompoundType, GetType, IntoValue, LhsValue, LhsValueSeed, Type, TypeMismatchError,
 };
+#[cfg(feature = "get-size2")]
+use get_size2::{GetSize, GetSizeTracker};
 use serde::de::{self, DeserializeSeed, Deserializer, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Serialize, Serializer};
@@ -18,6 +20,16 @@ use std::hint::unreachable_unchecked;
 pub(crate) enum InnerArray<'a> {
     Owned(Vec<LhsValue<'a>>),
     Borrowed(&'a [LhsValue<'a>]),
+}
+
+#[cfg(feature = "get-size2")]
+impl GetSize for InnerArray<'_> {
+    fn get_heap_size_with_tracker<T: GetSizeTracker>(&self, tracker: T) -> (usize, T) {
+        match self {
+            Self::Owned(values) => values.get_heap_size_with_tracker(tracker),
+            Self::Borrowed(_) => (0, tracker),
+        }
+    }
 }
 
 impl<'a> InnerArray<'a> {
@@ -79,6 +91,13 @@ impl Hash for InnerArray<'_> {
 pub struct Array<'a> {
     val_type: CompoundType,
     pub(crate) data: InnerArray<'a>,
+}
+
+#[cfg(feature = "get-size2")]
+impl GetSize for Array<'_> {
+    fn get_heap_size_with_tracker<T: GetSizeTracker>(&self, tracker: T) -> (usize, T) {
+        self.data.get_heap_size_with_tracker(tracker)
+    }
 }
 
 impl<'a> Array<'a> {
@@ -160,22 +179,33 @@ impl<'a> Array<'a> {
     where
         F: Fn(LhsValue<'a>) -> Option<LhsValue<'a>>,
     {
-        let Self { data, .. } = self;
-        let mut vec = match data {
-            InnerArray::Owned(vec) => vec,
-            InnerArray::Borrowed(slice) => slice.to_vec(),
-        };
         let val_type = value_type.into();
-        let mut write = 0;
-        for read in 0..vec.len() {
-            let elem = &mut vec[read];
-            if let Some(elem) = func(std::mem::replace(elem, LhsValue::Bool(false))) {
-                assert!(elem.get_type() == val_type.into());
-                vec[write] = elem;
-                write += 1;
+        let Self { data, .. } = self;
+        let vec = match data {
+            InnerArray::Owned(mut vec) => {
+                let mut write = 0;
+                for read in 0..vec.len() {
+                    let elem = &mut vec[read];
+                    if let Some(elem) = func(std::mem::replace(elem, LhsValue::Bool(false))) {
+                        assert!(elem.get_type() == val_type.into());
+                        vec[write] = elem;
+                        write += 1;
+                    }
+                }
+                vec.truncate(write);
+                vec
             }
-        }
-        vec.truncate(write);
+            InnerArray::Borrowed(slice) => {
+                let mut vec = Vec::with_capacity(slice.len());
+                for elem in slice {
+                    if let Some(elem) = func(elem.as_ref()) {
+                        assert!(elem.get_type() == val_type.into());
+                        vec.push(elem);
+                    }
+                }
+                vec
+            }
+        };
         Array {
             val_type,
             data: InnerArray::Owned(vec),
@@ -187,25 +217,35 @@ impl<'a> Array<'a> {
         val_type: impl Into<CompoundType>,
         iter: impl IntoIterator<Item = V>,
     ) -> Result<Self, TypeMismatchError> {
+        Self::try_from_iter_with_capacity(val_type, 0, iter)
+    }
+
+    /// Creates a new array from the specified iterator, reserving space for at
+    /// least `capacity` elements up front.
+    pub(crate) fn try_from_iter_with_capacity<V: Into<LhsValue<'a>>>(
+        val_type: impl Into<CompoundType>,
+        capacity: usize,
+        iter: impl IntoIterator<Item = V>,
+    ) -> Result<Self, TypeMismatchError> {
         let val_type = val_type.into();
-        iter.into_iter()
-            .map(|elem| {
-                let elem = elem.into();
-                let elem_type = elem.get_type();
-                if val_type != elem_type.into() {
-                    Err(TypeMismatchError {
-                        expected: Type::from(val_type).into(),
-                        actual: elem_type,
-                    })
-                } else {
-                    Ok(elem)
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map(|vec| Array {
-                val_type,
-                data: InnerArray::Owned(vec),
-            })
+        let iter = iter.into_iter();
+        let capacity = capacity.max(iter.size_hint().0);
+        let mut vec = Vec::with_capacity(capacity);
+        for elem in iter {
+            let elem = elem.into();
+            let elem_type = elem.get_type();
+            if val_type != elem_type.into() {
+                return Err(TypeMismatchError {
+                    expected: Type::from(val_type).into(),
+                    actual: elem_type,
+                });
+            }
+            vec.push(elem);
+        }
+        Ok(Array {
+            val_type,
+            data: InnerArray::Owned(vec),
+        })
     }
 
     /// Creates a new array form the specified vector.

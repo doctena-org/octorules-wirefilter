@@ -255,7 +255,8 @@ impl<'i, 's> LexWith<'i, &FilterParser<'s>> for IdentifierExpr {
         match item {
             Identifier::Field(field) => Ok((IdentifierExpr::Field(field.to_owned()), input)),
             Identifier::Function(function) => {
-                FunctionCallExpr::lex_with_function(input, parser, function)
+                let nested_parser = parser.with_increased_nesting(skip_space(input))?;
+                FunctionCallExpr::lex_with_function(input, &nested_parser, function)
                     .map(|(call, input)| (IdentifierExpr::FunctionCallExpr(call), input))
             }
         }
@@ -794,13 +795,14 @@ impl Expr for ComparisonExpr {
 #[allow(clippy::bool_assert_comparison)]
 mod tests {
     use super::*;
+    use crate::ast::ValueExpr;
     use crate::ast::function_expr::{FunctionCallArgExpr, FunctionCallExpr};
-    use crate::ast::logical_expr::LogicalExpr;
+    use crate::ast::logical_expr::{LogicalExpr, QuantifierArgExpr, QuantifierOp};
     use crate::execution_context::ExecutionContext;
     use crate::functions::{
-        FunctionArgKind, FunctionArgs, FunctionDefinition, FunctionDefinitionContext,
-        FunctionParam, FunctionParamError, SimpleFunctionDefinition, SimpleFunctionImpl,
-        SimpleFunctionOptParam, SimpleFunctionParam,
+        CompiledFunction, FunctionArgKind, FunctionArgs, FunctionDefinition,
+        FunctionDefinitionContext, FunctionParam, FunctionParamError, SimpleFunctionDefinition,
+        SimpleFunctionImpl, SimpleFunctionOptParam, SimpleFunctionParam,
     };
     use crate::lhs_types::{Array, Map};
     use crate::list_matcher::{ListDefinition, ListMatcher};
@@ -817,19 +819,6 @@ mod tests {
     use std::iter::once;
     use std::net::IpAddr;
     use std::sync::LazyLock;
-
-    fn any_function<'a>(args: FunctionArgs<'_, 'a>) -> Option<LhsValue<'a>> {
-        match args.next()? {
-            Ok(v) => Some(LhsValue::Bool(
-                Array::try_from(v)
-                    .unwrap()
-                    .into_iter()
-                    .any(|lhs| bool::try_from(lhs).unwrap()),
-            )),
-            Err(Type::Array(ref arr)) if arr.get_type() == Type::Bool => None,
-            _ => unreachable!(),
-        }
-    }
 
     fn echo_function<'a>(args: FunctionArgs<'_, 'a>) -> Option<LhsValue<'a>> {
         args.next()?.ok()
@@ -907,12 +896,7 @@ mod tests {
             &self,
             _: &mut dyn ExactSizeIterator<Item = FunctionParam<'_>>,
             _: Option<FunctionDefinitionContext>,
-        ) -> Box<
-            dyn for<'i, 'a> Fn(FunctionArgs<'i, 'a>) -> Option<LhsValue<'a>>
-                + Sync
-                + Send
-                + 'static,
-        > {
+        ) -> CompiledFunction {
             Box::new(|args| {
                 let value_array = Array::try_from(args.next().unwrap().unwrap()).unwrap();
                 let keep_array = Array::try_from(args.next().unwrap().unwrap()).unwrap();
@@ -971,22 +955,10 @@ mod tests {
             tcp.port: Int,
             tcp.ports: Array(Int),
             array.of.bool: Array(Bool),
+            map.bool.arr: Map(Array(Bool)),
+            map.bytes.arr: Map(Array(Bytes)),
             http.parts: Array(Array(Bytes)),
         };
-        builder
-            .add_function(
-                "any",
-                SimpleFunctionDefinition {
-                    params: vec![SimpleFunctionParam {
-                        arg_kind: SimpleFunctionArgKind::Field,
-                        val_type: Type::Array(Type::Bool.into()),
-                    }],
-                    opt_params: vec![],
-                    return_type: Type::Bool,
-                    implementation: SimpleFunctionImpl::new(any_function),
-                },
-            )
-            .unwrap();
         builder
             .add_function(
                 "echo",
@@ -1030,6 +1002,26 @@ mod tests {
                             default_value: "".into(),
                         },
                     ],
+                    return_type: Type::Bytes,
+                    implementation: SimpleFunctionImpl::new(concat_function),
+                },
+            )
+            .unwrap();
+        builder
+            .add_function(
+                "concat_fields",
+                SimpleFunctionDefinition {
+                    params: vec![
+                        SimpleFunctionParam {
+                            arg_kind: SimpleFunctionArgKind::Field,
+                            val_type: Type::Bytes,
+                        },
+                        SimpleFunctionParam {
+                            arg_kind: SimpleFunctionArgKind::Field,
+                            val_type: Type::Bytes,
+                        },
+                    ],
+                    opt_params: vec![],
                     return_type: Type::Bytes,
                     implementation: SimpleFunctionImpl::new(concat_function),
                 },
@@ -2208,6 +2200,86 @@ mod tests {
         assert_eq!(expr.execute_one(ctx), true);
     }
 
+    // The non-mapped argument (the "-cf" literal) must be applied to *every*
+    // mapped element, even though it is now evaluated only once per call.
+    #[test]
+    fn test_map_each_function_non_mapped_arg_applied_to_all_elements() {
+        let (expr, rest) = FilterParser::new(&SCHEME)
+            .lex_as::<FunctionCallExpr>(r#"concat(http.cookies[*], "-cf")"#)
+            .unwrap();
+        assert_eq!(rest, "");
+
+        let expr = expr.compile();
+        let ctx = &mut ExecutionContext::new(&SCHEME);
+        ctx.set_field_value(
+            field("http.cookies"),
+            Array::from_iter(["one", "two", "three"]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            expr.execute(ctx),
+            Ok(LhsValue::Array(Array::from_iter([
+                "one-cf", "two-cf", "three-cf"
+            ])))
+        );
+    }
+
+    // A non-mapped argument that is expensive to re-evaluate (here a nested
+    // function call) is evaluated once and reused for every mapped element.
+    #[test]
+    fn test_map_each_memoizes_expensive_non_mapped_arg() {
+        let (expr, rest) = FilterParser::new(&SCHEME)
+            .lex_as::<FunctionCallExpr>(r#"concat_fields(http.cookies[*], lowercase(http.host))"#)
+            .unwrap();
+        assert_eq!(rest, "");
+
+        let expr = expr.compile();
+        let ctx = &mut ExecutionContext::new(&SCHEME);
+        ctx.set_field_value(
+            field("http.cookies"),
+            Array::from_iter(["one", "two", "three"]),
+        )
+        .unwrap();
+        ctx.set_field_value(field("http.host"), "SUFFIX").unwrap();
+
+        // `lowercase(http.host)` == "suffix" is appended to every element.
+        assert_eq!(
+            expr.execute(ctx),
+            Ok(LhsValue::Array(Array::from_iter([
+                "onesuffix",
+                "twosuffix",
+                "threesuffix"
+            ])))
+        );
+    }
+
+    // map_each over a Map with no extra args: exercises the fused Map -> Array
+    // path (no intermediate array allocation) and the empty-args fast path.
+    #[test]
+    fn test_map_each_on_map_no_extra_args() {
+        let (expr, rest) = FilterParser::new(&SCHEME)
+            .lex_as::<FunctionCallExpr>(r#"lowercase(http.headers[*])"#)
+            .unwrap();
+        assert_eq!(rest, "");
+
+        let expr = expr.compile();
+        let ctx = &mut ExecutionContext::new(&SCHEME);
+        let headers = LhsValue::from({
+            let mut map = TypedMap::new();
+            map.insert(b"0".to_vec().into(), "ONE");
+            map.insert(b"1".to_vec().into(), "TWO");
+            map.insert(b"2".to_vec().into(), "THREE");
+            map
+        });
+        ctx.set_field_value(field("http.headers"), headers).unwrap();
+
+        assert_eq!(
+            expr.execute(ctx),
+            Ok(LhsValue::Array(Array::from_iter(["one", "two", "three"])))
+        );
+    }
+
     #[test]
     fn test_map_each_on_array_for_cmp() {
         let expr = assert_ok!(
@@ -2570,53 +2642,37 @@ mod tests {
         let list = SCHEME.get_list(&Type::Int).unwrap();
         let expr = assert_ok!(
             FilterParser::new(&SCHEME).lex_as(r#"any(tcp.ports[*] in $even)"#),
-            ComparisonExpr {
-                lhs: IndexExpr {
-                    identifier: IdentifierExpr::FunctionCallExpr(FunctionCallExpr {
-                        function: SCHEME.get_function("any").unwrap().to_owned(),
-                        args: vec![FunctionCallArgExpr::Logical(LogicalExpr::Comparison(
-                            ComparisonExpr {
-                                lhs: IndexExpr {
-                                    identifier: IdentifierExpr::Field(
-                                        field("tcp.ports").to_owned()
-                                    ),
-                                    indexes: vec![FieldIndex::MapEach],
-                                },
-                                op: ComparisonOpExpr::InList {
-                                    list: list.to_owned(),
-                                    name: ListName::from("even".to_string()),
-                                },
-                            }
-                        ))],
-                        context: None,
-                    }),
-                    indexes: vec![],
-                },
-                op: ComparisonOpExpr::IsTrue
+            LogicalExpr::Quantifier {
+                op: QuantifierOp::Any,
+                arg: Box::new(QuantifierArgExpr::Logical(LogicalExpr::Comparison(
+                    ComparisonExpr {
+                        lhs: IndexExpr {
+                            identifier: IdentifierExpr::Field(field("tcp.ports").to_owned()),
+                            indexes: vec![FieldIndex::MapEach],
+                        },
+                        op: ComparisonOpExpr::InList {
+                            list: list.to_owned(),
+                            name: ListName::from("even".to_string()),
+                        },
+                    }
+                ))),
             }
         );
 
-        assert_eq!(expr.lhs.identifier.get_type(), Type::Bool);
-        assert_eq!(expr.lhs.get_type(), Type::Bool);
         assert_eq!(expr.get_type(), Type::Bool);
 
         assert_json!(
             expr,
             {
-                "lhs": {
-                    "name": "any",
-                    "args": [
-                        {
-                            "kind": "SimpleExpr",
-                            "value": {
-                                "lhs": ["tcp.ports", {"kind": "MapEach"}],
-                                "op": "InList",
-                                "rhs": "even"
-                            }
-                        }
-                    ]
-                },
-                "op": "IsTrue"
+                "op": "Any",
+                "arg": {
+                    "kind": "SimpleExpr",
+                    "value": {
+                        "lhs": ["tcp.ports", {"kind": "MapEach"}],
+                        "op": "InList",
+                        "rhs": "even"
+                    }
+                }
             }
         );
 
@@ -2635,6 +2691,34 @@ mod tests {
 
         ctx.set_field_value(field("tcp.ports"), arr2).unwrap();
         assert_eq!(expr.execute_one(ctx), false);
+    }
+
+    #[test]
+    fn test_any_all_functions_with_missing_arrays() {
+        let ctx = &mut ExecutionContext::new(&SCHEME);
+        ctx.set_field_value(
+            field("map.bool.arr"),
+            Map::new(Type::Array(Type::Bool.into())),
+        )
+        .unwrap();
+        ctx.set_field_value(
+            field("map.bytes.arr"),
+            Map::new(Type::Array(Type::Bytes.into())),
+        )
+        .unwrap();
+
+        let execute = |input| SCHEME.parse(input).unwrap().compile().execute(ctx).unwrap();
+
+        assert_eq!(execute(r#"any(map.bool.arr["missing"])"#), false);
+        assert_eq!(execute(r#"all(map.bool.arr["missing"])"#), false);
+        assert_eq!(
+            execute(r#"any(map.bytes.arr["missing"][*] matches "bar")"#),
+            false
+        );
+        assert_eq!(
+            execute(r#"all(map.bytes.arr["missing"][*] matches "bar")"#),
+            true
+        );
     }
 
     #[test]

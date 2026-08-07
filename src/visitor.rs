@@ -8,8 +8,8 @@ use std::ops::RangeInclusive;
 
 use wirefilter::{
     ComparisonExpr, ComparisonOpExpr, ExplicitIpRange, FunctionCallArgExpr, IdentifierExpr,
-    IndexExpr, IntOp, IntRange, IpRange, LogicalExpr, LogicalOp, OrderingOp, RhsValue, RhsValues,
-    UnaryOp,
+    IndexExpr, IntOp, IntRange, IpRange, LogicalExpr, LogicalOp, OrderingOp, QuantifierArgExpr,
+    QuantifierOp, RhsValue, RhsValues, UnaryOp,
 };
 
 /// Maximum nesting depth before the extractor stops descending.
@@ -304,6 +304,23 @@ impl ExpressionExtractor {
                     UnaryOp::Not => self.add_operator("not"),
                 }
                 self.walk_logical(arg);
+            }
+            // `any(...)` / `all(...)`: quantifiers in the AST since upstream
+            // af1a1e96, but still function calls to the expression author, so
+            // they are recorded under `functions` as they always were.
+            LogicalExpr::Quantifier { op, arg } => {
+                self.add_function(match op {
+                    QuantifierOp::Any => "any",
+                    QuantifierOp::All => "all",
+                });
+                match arg.as_ref() {
+                    QuantifierArgExpr::IndexExpr(index_expr) => {
+                        self.walk_index_expr(index_expr);
+                    }
+                    QuantifierArgExpr::Logical(logical_expr) => {
+                        self.walk_logical(logical_expr);
+                    }
+                }
             }
         }
         self.depth -= 1;

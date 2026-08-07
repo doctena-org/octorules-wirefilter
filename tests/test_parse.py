@@ -630,12 +630,23 @@ class TestInputLimits:
         assert result["int_literals"] == []
 
     def test_depth_exceeded_flag_on_deep_logical_nesting(self):
-        """Deeply nested logical expression triggers depth_exceeded flag."""
-        depth = 150
+        """Between our visitor's walk limit (100) and the engine's parse
+        limit (128), the expression parses and the flag reports the
+        truncated walk."""
+        depth = 110
         expr = "(" * depth + "ssl" + ")" * depth
         result = parse_expression(expr)
         assert "error" not in result, f"unexpected error: {result.get('error')}"
         assert result.get("depth_exceeded") is True
+
+    def test_engine_rejects_nesting_beyond_128(self):
+        """The engine enforces its own nesting limit at parse time
+        (upstream 02741bcb) — the same rejection Cloudflare's edge gives,
+        so lint now matches it instead of parsing pathological input."""
+        depth = 150
+        expr = "(" * depth + "ssl" + ")" * depth
+        result = parse_expression(expr)
+        assert "maximum nesting depth exceeded" in result.get("error", "")
 
     def test_depth_not_exceeded_at_shallow_nesting(self):
         """Shallow nesting (10 levels) does NOT set depth_exceeded."""

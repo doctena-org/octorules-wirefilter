@@ -3,7 +3,7 @@
 //! Registers Cloudflare fields and functions with their types.
 //! A single scheme is built once and cached in a `LazyLock` static:
 //!
-//! - `SCHEME` — 178 fields (incl. `http.request.uri.path`), 36 functions.
+//! - `SCHEME` — 178 fields (incl. `http.request.uri.path`), 34 registered functions (+ native `any`/`all`).
 //!
 //! # Panics
 //!
@@ -16,9 +16,9 @@
 use std::sync::LazyLock;
 
 use wirefilter::{
-    AllFunction, AlwaysList, AnyFunction, ConcatFunction, FunctionArgs, GetType, LhsValue, Scheme,
-    SchemeBuilder, SimpleFunctionArgKind, SimpleFunctionDefinition, SimpleFunctionImpl,
-    SimpleFunctionOptParam, SimpleFunctionParam, Type,
+    AlwaysList, ConcatFunction, FunctionArgs, GetType, LhsValue, Scheme, SchemeBuilder,
+    SimpleFunctionArgKind, SimpleFunctionDefinition, SimpleFunctionImpl, SimpleFunctionOptParam,
+    SimpleFunctionParam, Type,
 };
 
 /// Stub function implementation that returns None (field value passthrough).
@@ -90,7 +90,7 @@ fn any_param(val_type: Type) -> SimpleFunctionParam {
     }
 }
 
-/// The wirefilter scheme — 178 fields, 36 functions.
+/// The wirefilter scheme — 178 fields, 34 registered functions (+ native `any`/`all`).
 ///
 /// `http.request.uri.path` is registered as a regular field. octorules always
 /// uses this single scheme for all phases; transform-phase function-call syntax
@@ -647,13 +647,15 @@ fn register_magic_firewall_fields(b: &mut SchemeBuilder) {
     b.add_field("tcp.flags.urg", Type::Bool).unwrap();
 }
 
-/// Register all 36 functions shared by both schemes.
+/// Register the 34 functions shared by both schemes (`any`/`all` parse
+/// natively as quantifiers and need no registration).
 ///
 /// Source: <https://developers.cloudflare.com/ruleset-engine/rules-language/functions/>
 fn register_common_functions(b: &mut SchemeBuilder) {
-    // Built-in wirefilter functions
-    b.add_function("any", AnyFunction::default()).unwrap();
-    b.add_function("all", AllFunction::default()).unwrap();
+    // Built-in wirefilter functions.  `any` and `all` are no longer
+    // registered: the engine parses them natively as logical quantifiers
+    // (upstream af1a1e96).  They stay in COMMON_FUNCTION_NAMES because they
+    // remain callable in expressions.
     b.add_function("concat", ConcatFunction::new()).unwrap();
 
     // String transformation functions — Bytes → Bytes
@@ -1135,8 +1137,11 @@ mod tests {
 
     #[test]
     fn scheme_has_all_functions() {
-        // 3 built-in (any, all, concat) + 33 custom = 36
-        assert_eq!(SCHEME.function_count(), 36);
+        // 1 built-in (concat) + 33 custom = 34.  `any`/`all` left the
+        // registry when upstream made them native quantifiers; they are
+        // still callable (see quantifiers_parse_without_registration) and
+        // still listed in COMMON_FUNCTION_NAMES.
+        assert_eq!(SCHEME.function_count(), 34);
     }
 
     // ── 2026 CF additions — verify presence ──
@@ -1348,10 +1353,29 @@ mod tests {
 
     #[test]
     fn all_common_functions_exist_in_scheme() {
+        // `any` and `all` are parsed natively as quantifiers (upstream
+        // af1a1e96) rather than registered; callability is asserted by
+        // quantifiers_parse_without_registration below.
         for name in COMMON_FUNCTION_NAMES {
+            if matches!(*name, "any" | "all") {
+                continue;
+            }
             assert!(
                 SCHEME.get_function(name).is_ok(),
                 "COMMON_FUNCTION_NAMES contains {name:?} but it's not registered in SCHEME"
+            );
+        }
+    }
+
+    #[test]
+    fn quantifiers_parse_without_registration() {
+        for expr in [
+            r#"any(http.request.headers.names[*] == "x")"#,
+            r#"all(http.request.headers.names[*] != "y")"#,
+        ] {
+            assert!(
+                SCHEME.parse(expr).is_ok(),
+                "quantifier expression failed to parse: {expr}"
             );
         }
     }

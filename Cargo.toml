@@ -20,4 +20,7 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.29", features = ["extension-module"] }
 # Pinned to specific commit: SchemeBuilder and function registration APIs
 # are not in the published crates.io wirefilter-engine v0.7.0.
-wirefilter-engine = { git = "https://github.com/cloudflare/wirefilter", rev = "6621924baf36f8ba7f603433dbe6f857ad3d5589" }
+# default-features = false skips get-size2 (LhsValue memory accounting, an
+# execution-side concern; we only parse). "regex" stays: the scheme has
+# regex-typed fields and matches() support.
+wirefilter-engine = { git = "https://github.com/cloudflare/wirefilter", rev = "ec8e24e26e2707a88034bfe161beeb2a4f51f8df", default-features = false, features = ["regex"] }
