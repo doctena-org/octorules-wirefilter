@@ -23,6 +23,8 @@ const MAX_EXPRESSION_LEN: usize = 1_048_576;
 /// - `wildcard_star_limit`: 10 — prevents excessive `*` metacharacters that
 ///   would cause catastrophic backtracking at evaluation time.
 /// - Regex size limits: wirefilter defaults (10 MB DFA, 2 MB compiled).
+/// - Nesting depth limit: wirefilter default (128) — deeper expressions fail
+///   at parse with "maximum nesting depth exceeded", as on Cloudflare's edge.
 pub(crate) fn parser_settings() -> ParserSettings {
     ParserSettings {
         wildcard_star_limit: 10,

@@ -940,3 +940,26 @@ class TestWildcardLimit:
         # Escaped stars are literal — may or may not count depending on
         # wirefilter's implementation. Just verify it doesn't crash.
         assert isinstance(r, dict)
+
+
+class TestQuantifiersInParseOutput:
+    """any()/all() are native AST quantifiers since the ec8e24e engine bump,
+    not registered functions — but to the expression author they are function
+    calls, so parse output must keep reporting them under `functions`."""
+
+    def test_any_reported_as_function_with_inner_field(self):
+        result = parse_expression('any(http.request.headers.names[*] == "x")')
+        assert "error" not in result, result.get("error")
+        assert "any" in result["functions"]
+        assert "http.request.headers.names" in result["fields"]
+
+    def test_all_reported_as_function(self):
+        result = parse_expression('all(http.request.headers.names[*] != "y")')
+        assert "error" not in result, result.get("error")
+        assert "all" in result["functions"]
+
+    def test_nested_function_inside_quantifier_also_reported(self):
+        result = parse_expression('any(split(http.request.uri.path, "/", 3)[*] eq "api")')
+        assert "error" not in result, result.get("error")
+        assert "any" in result["functions"]
+        assert "split" in result["functions"]
