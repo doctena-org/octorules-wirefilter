@@ -41,14 +41,11 @@ use rand_core::{CryptoRng, RngCore, SeedableRng, TryCryptoRng, TryRngCore};
 ///
 /// # Error handling
 ///
-/// Although unlikely, reseeding the wrapped PRNG can fail. `ReseedingRng` will
-/// never panic but try to handle the error intelligently through some
-/// combination of retrying and delaying reseeding until later.
-/// If handling the source error fails `ReseedingRng` will continue generating
-/// data from the wrapped PRNG without reseeding.
+/// Errors during reseeding are extremely unlikely, assuming the same random
+/// source successfully initialized the inner PRNG. A reseeding failure will be
+/// reported via panic (new behaviour since v0.9.3).
 ///
-/// Manually calling [`reseed()`] will not have this retry or delay logic, but
-/// reports the error.
+/// Manually calling [`reseed()`] will report errors.
 ///
 /// # Example
 ///
