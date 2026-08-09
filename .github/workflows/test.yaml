@@ -58,6 +58,7 @@ jobs:
 
   python:
     name: Python ${{ matrix.python-version }}
+    needs: config
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
