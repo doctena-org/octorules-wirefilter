@@ -2,12 +2,19 @@
 
 from typing import Any
 
+class UnknownSchemeError(ValueError):
+    """Raised when `scheme` names a field set this build does not have.
+
+    Subclasses `ValueError`, so a caller that already catches `ValueError`
+    around the FFI keeps catching it.
+    """
+
 def parse_expression(expr: str, scheme: str | None = None) -> dict[str, Any]:
     """Parse a wirefilter expression and return extracted components.
 
     The `scheme` parameter selects the field scheme: `"magic_firewall"` uses
-    the packet-level Layer-4 scheme; any other value (or `None`) uses the
-    default HTTP scheme.
+    the packet-level Layer-4 scheme, and omitting it (or passing `None`) uses
+    the default HTTP scheme. Any other name raises `UnknownSchemeError`.
 
     Returns a dict with the following keys:
       - `fields`: list of field names (strings) referenced in the expression.
@@ -38,8 +45,9 @@ def get_schema_info(scheme: str | None = None) -> dict[str, Any]:
     """Return schema metadata for a wirefilter scheme.
 
     The `scheme` parameter selects the field set: `"magic_firewall"` returns
-    the Layer-4 (Magic Transit) fields; any other value (or `None`) returns
-    the default HTTP fields.
+    the Layer-4 (Magic Transit) fields, and omitting it (or passing `None`)
+    returns the default HTTP fields. Any other name raises
+    `UnknownSchemeError`.
 
     Returns a dict with:
       - `fields`: list of dicts, each with `name` (str) and `type` (str,

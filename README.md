@@ -46,7 +46,7 @@ Two wirefilter schemes are built at startup and cached:
 - **Wildcard limit** — `ParserSettings` enforces a maximum of 10 `*`
   metacharacters per wildcard pattern to prevent catastrophic backtracking.
 
-The `scheme` parameter selects the field set: `"magic_firewall"` parses against the Layer-4 packet scheme; any other value (or `None`) uses the default HTTP scheme. Transform-phase function-call syntax (where `http.request.uri.path` is callable) is handled on the Python side.
+The `scheme` parameter selects the field set: `"magic_firewall"` parses against the Layer-4 packet scheme, and omitting it (or passing `None`) uses the default HTTP scheme. Any other name raises `UnknownSchemeError` (a `ValueError` subclass) rather than falling back to HTTP, so a scheme this build does not have can never validate expressions against the wrong field set. Transform-phase function-call syntax (where `http.request.uri.path` is callable) is handled on the Python side.
 
 ## Building from source
 
@@ -125,7 +125,7 @@ info = get_schema_info()
 #  'functions': ['lower', 'upper', ...]}
 ```
 
-Returns schema metadata for the requested scheme (`scheme="magic_firewall"` for the Layer-4 set; default is HTTP). `octorules-cloudflare` builds its linter field/function registry from this at import time. Field types use the Python `FieldType` enum names (`STRING`, `INT`, `BOOL`, `IP`, `ARRAY_STRING`, etc.).
+Returns schema metadata for the requested scheme (`scheme="magic_firewall"` for the Layer-4 set; default is HTTP, and an unknown name raises `UnknownSchemeError`). `octorules-cloudflare` builds its linter field/function registry from this at import time. Field types use the Python `FieldType` enum names (`STRING`, `INT`, `BOOL`, `IP`, `ARRAY_STRING`, etc.).
 
 ## Contributing
 

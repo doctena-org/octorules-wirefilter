@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `UnknownSchemeError`, a `ValueError` subclass, so callers can tell a bad `scheme` argument from a parser failure without matching on the message.
+
+### Changed
+- An unrecognised `scheme` name raises `UnknownSchemeError` instead of parsing against the default HTTP scheme. Affects `parse_expression` and `get_schema_info`; omitting `scheme` (or passing `None`) is unchanged.
+
 ## [0.5.2] - 2026-08-08
 
 ### Changed

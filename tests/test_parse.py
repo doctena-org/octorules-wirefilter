@@ -9,7 +9,11 @@ from __future__ import annotations
 import pytest
 
 try:
-    from octorules_wirefilter import get_schema_info, parse_expression
+    from octorules_wirefilter import (
+        UnknownSchemeError,
+        get_schema_info,
+        parse_expression,
+    )
 
     HAS_WIREFILTER = True
 except ImportError:
@@ -302,20 +306,53 @@ class TestSchemeParameter:
         assert "error" not in result
         assert "http.request.uri.path" in result["fields"]
 
-    def test_unknown_scheme_uses_http(self):
-        """Any scheme other than "magic_firewall" falls back to the HTTP scheme."""
+    def test_unknown_scheme_raises(self):
+        """A scheme name this build does not know is an error, not a fall back.
+
+        Regression test: each of these used to resolve to the HTTP scheme with
+        no signal, so a caller asking for a scheme that does not exist had its
+        expressions checked against the wrong field set.
+        """
         for scheme in (
             "http_request_firewall_custom",
             "url_rewrite_rules",
             "request_header_rules",
             "response_header_rules",
         ):
-            result = parse_expression(
-                'http.request.uri.path eq "/test"',
-                scheme=scheme,
-            )
-            assert "error" not in result, f"scheme={scheme}: {result.get('error')}"
-            assert "http.request.uri.path" in result["fields"]
+            with pytest.raises(ValueError, match="unknown scheme"):
+                parse_expression('http.request.uri.path eq "/test"', scheme=scheme)
+
+    def test_unknown_scheme_raises_the_dedicated_type(self):
+        """The rejection is UnknownSchemeError, and it is still a ValueError.
+
+        Subclassing matters: callers that wrap the FFI in `except ValueError`
+        keep working, while a caller that wants to tell a bad scheme apart from
+        a genuine parser failure can catch the narrower type instead of
+        matching on the message.
+        """
+        assert issubclass(UnknownSchemeError, ValueError)
+        with pytest.raises(UnknownSchemeError):
+            parse_expression('http.request.uri.path eq "/test"', scheme="gateway")
+        with pytest.raises(UnknownSchemeError):
+            get_schema_info(scheme="gateway")
+
+    def test_unknown_scheme_error_names_the_valid_schemes(self):
+        """The rejection has to say what to pass instead."""
+        with pytest.raises(ValueError) as excinfo:
+            parse_expression('http.request.uri.path eq "/test"', scheme="gateway")
+        message = str(excinfo.value)
+        assert '"gateway"' in message
+        assert '"magic_firewall"' in message
+        assert "omit for the default HTTP scheme" in message
+
+    def test_unknown_scheme_raises_for_empty_expression(self):
+        """The scheme is validated before the expression is looked at.
+
+        Empty and oversized expressions return early, so resolving the scheme
+        after them would make a caller bug visible only for some inputs.
+        """
+        with pytest.raises(ValueError, match="unknown scheme"):
+            parse_expression("", scheme="gateway")
 
     def test_magic_firewall_scheme(self):
         """scheme="magic_firewall" parses Layer-4 packet fields."""
@@ -666,22 +703,27 @@ class TestInputLimits:
 
 
 class TestSchemeEdgeCases:
-    """Edge cases for the scheme parameter — any value other than
-    "magic_firewall" falls back to the default HTTP scheme."""
+    """Edge cases for the scheme parameter. Only `None` and a name the build
+    knows resolve; everything else raises."""
+
+    def test_none_resolves_to_http(self):
+        result = parse_expression('http.request.uri.path eq "/test"', scheme=None)
+        assert "error" not in result
+        assert "http.request.uri.path" in result["fields"]
 
     @pytest.mark.parametrize(
         "scheme",
         [
-            None,  # explicit None
-            "",  # empty string
+            "",  # an empty name is a name, not an omission
             "url_rewrite_rule",  # not a recognized scheme name
             "URL_REWRITE_RULES",  # wrong case
+            "magic-firewall",  # one character off the real name
+            "magic_firewall ",  # trailing whitespace
         ],
     )
-    def test_unknown_scheme_falls_back_to_http(self, scheme):
-        result = parse_expression('http.request.uri.path eq "/test"', scheme=scheme)
-        assert "error" not in result
-        assert "http.request.uri.path" in result["fields"]
+    def test_unknown_scheme_raises(self, scheme):
+        with pytest.raises(ValueError, match="unknown scheme"):
+            parse_expression('http.request.uri.path eq "/test"', scheme=scheme)
 
 
 class TestGetSchemaInfo:
@@ -730,6 +772,21 @@ class TestGetSchemaInfo:
         info = get_schema_info()
         assert "lower" in info["functions"]
         assert "starts_with" in info["functions"]
+
+    def test_magic_firewall_scheme_returns_packet_fields(self):
+        names = {f["name"] for f in get_schema_info(scheme="magic_firewall")["fields"]}
+        assert "ip.len" in names
+        assert "http.host" not in names
+
+    def test_unknown_scheme_raises(self):
+        """Validated exactly as in parse_expression.
+
+        Both functions had the same silent fall back, so fixing only the parser
+        would leave a caller building its field registry from the wrong scheme
+        and then linting against a registry that never matches.
+        """
+        with pytest.raises(ValueError, match="unknown scheme"):
+            get_schema_info(scheme="gateway")
 
 
 # ---------------------------------------------------------------------------

@@ -3,8 +3,11 @@
 //! Exposes `parse_expression(expr, scheme=None)` and `get_schema_info(scheme=None)`
 //! to Python. `parse_expression` returns extracted components on success or
 //! `{"error": "..."}` on parse failure; `scheme` selects the HTTP or
-//! `"magic_firewall"` (Layer-4) field set.
+//! `"magic_firewall"` (Layer-4) field set, and any other name raises
+//! `UnknownSchemeError` (a `ValueError` subclass).
 
+use pyo3::create_exception;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use wirefilter::ParserSettings;
@@ -32,6 +35,64 @@ pub(crate) fn parser_settings() -> ParserSettings {
     }
 }
 
+create_exception!(
+    octorules_wirefilter,
+    UnknownSchemeError,
+    PyValueError,
+    "Raised when the `scheme` argument names a field set this build does not have.\n\n\
+     Subclasses `ValueError`, so a caller that already catches `ValueError` around\n\
+     the FFI keeps catching it.  It exists so a caller that wants to treat a bad\n\
+     scheme differently from a genuine FFI failure can, without matching on the\n\
+     message text: one is a bug in the caller's own scheme mapping, the other is\n\
+     the parser falling over."
+);
+
+/// Which field set a call operates against.
+#[derive(Clone, Copy)]
+enum SchemeSelector {
+    /// The default HTTP scheme (`SCHEME`), selected by omitting `scheme`.
+    Http,
+    /// The packet-level Magic Transit / Layer-4 scheme (`SCHEME_MAGIC`).
+    MagicFirewall,
+}
+
+/// Every named scheme, and the field set it selects.
+///
+/// Single source of truth: `resolve_scheme` matches against this list and
+/// builds its error message from it, so adding a scheme here is the whole
+/// change on this side.  The default HTTP scheme is deliberately absent: it
+/// has no name, and is selected by omitting the argument.
+const NAMED_SCHEMES: &[(&str, SchemeSelector)] =
+    &[("magic_firewall", SchemeSelector::MagicFirewall)];
+
+/// Resolve the `scheme` argument, rejecting a name this build does not know.
+///
+/// An unrecognised name is an error rather than a silent fall back to the HTTP
+/// scheme.  A caller asking for a scheme that does not exist is validating
+/// against the wrong field set, and both outcomes of doing that quietly are
+/// worse than raising: a field that is valid in the intended scheme comes back
+/// as `unknown identifier`, with the caret under an expression that is
+/// correct; or, when the expression happens to be legal HTTP as well, it
+/// validates clean and the requested scheme is never applied at all.  Neither
+/// leaves anything the caller could detect.
+fn resolve_scheme(scheme: Option<&str>) -> PyResult<SchemeSelector> {
+    let Some(name) = scheme else {
+        return Ok(SchemeSelector::Http);
+    };
+    if let Some((_, selector)) = NAMED_SCHEMES.iter().find(|(known, _)| *known == name) {
+        return Ok(*selector);
+    }
+    let valid = NAMED_SCHEMES
+        .iter()
+        .map(|(known, _)| format!("{known:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(UnknownSchemeError::new_err(format!(
+        "unknown scheme {name:?}; valid schemes: {valid} \
+         (omit for the default HTTP scheme)"
+    )))
+}
+
 /// Standard result keys returned by `parse_expression`.
 const RESULT_KEYS: &[&str] = &[
     "fields",
@@ -55,10 +116,11 @@ fn set_empty_result_keys(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<(
 /// Parse a Cloudflare wirefilter expression and return extracted components.
 ///
 /// The `scheme` parameter selects the field scheme: `"magic_firewall"` uses
-/// the packet-level Layer-4 scheme (`SCHEME_MAGIC`); any other value (or
-/// `None`) uses the default HTTP `SCHEME`. The caller maps its ruleset phases
-/// to a selector — e.g. octorules-cloudflare maps its account-level Magic
-/// Transit phases to `"magic_firewall"`.
+/// the packet-level Layer-4 scheme (`SCHEME_MAGIC`), and omitting it (or
+/// passing `None`) uses the default HTTP `SCHEME`. Any other name raises
+/// `UnknownSchemeError`. The caller maps its ruleset phases to a selector: for
+/// example, octorules-cloudflare maps its account-level Magic Transit phases
+/// to `"magic_firewall"`.
 ///
 /// Returns a Python dict with:
 ///   - On success: `{"fields": [...], "functions": [...], "operators": [...], ...}`
@@ -70,6 +132,11 @@ fn set_empty_result_keys(py: Python<'_>, dict: &Bound<'_, PyDict>) -> PyResult<(
 #[pyfunction]
 #[pyo3(signature = (expr, scheme=None))]
 fn parse_expression(py: Python<'_>, expr: &str, scheme: Option<&str>) -> PyResult<Py<PyAny>> {
+    // Resolve the scheme before anything else.  An unknown name is a caller
+    // bug, so whether it surfaces must not depend on the expression: the
+    // oversized and empty-expression paths below return before the parser runs.
+    let selector = resolve_scheme(scheme)?;
+
     // Reject oversized expressions before any processing.
     if expr.len() > MAX_EXPRESSION_LEN {
         let dict = PyDict::new(py);
@@ -95,11 +162,11 @@ fn parse_expression(py: Python<'_>, expr: &str, scheme: Option<&str>) -> PyResul
 
     // Select the field scheme. Account-level Magic Transit (Layer-4) phases use
     // the packet-level SCHEME_MAGIC; everything else uses the HTTP SCHEME.
-    let parsed = match scheme {
-        Some("magic_firewall") => SCHEME_MAGIC
+    let parsed = match selector {
+        SchemeSelector::MagicFirewall => SCHEME_MAGIC
             .parser_with_settings(parser_settings())
             .parse(trimmed),
-        _ => SCHEME
+        SchemeSelector::Http => SCHEME
             .parser_with_settings(parser_settings())
             .parse(trimmed),
     };
@@ -152,9 +219,10 @@ fn parse_expression(py: Python<'_>, expr: &str, scheme: Option<&str>) -> PyResul
 /// Return schema metadata for a wirefilter scheme.
 ///
 /// `scheme` selects the field set: `"magic_firewall"` returns the Layer-4
-/// (Magic Transit) fields; any other value (or `None`) returns the default
-/// HTTP fields. Mirrors `parse_expression`'s `scheme` argument so callers can
-/// build a per-scheme field registry from a single source.
+/// (Magic Transit) fields, and omitting it (or passing `None`) returns the
+/// default HTTP fields. Any other name raises `UnknownSchemeError`. Mirrors
+/// `parse_expression`'s `scheme` argument so callers can build a per-scheme
+/// field registry from a single source.
 ///
 /// Returns a Python dict with:
 ///   - `fields`: list of `{"name": "...", "type": "STRING"}` dicts
@@ -162,12 +230,13 @@ fn parse_expression(py: Python<'_>, expr: &str, scheme: Option<&str>) -> PyResul
 #[pyfunction]
 #[pyo3(signature = (scheme=None))]
 fn get_schema_info(py: Python<'_>, scheme: Option<&str>) -> PyResult<Py<PyAny>> {
+    let selector = resolve_scheme(scheme)?;
     let dict = PyDict::new(py);
 
     // Fields
-    let field_defs = match scheme {
-        Some("magic_firewall") => scheme::magic_field_defs(),
-        _ => scheme::common_field_defs(),
+    let field_defs = match selector {
+        SchemeSelector::MagicFirewall => scheme::magic_field_defs(),
+        SchemeSelector::Http => scheme::common_field_defs(),
     };
     let fields_list = PyList::empty(py);
     for (name, py_type) in field_defs {
@@ -190,5 +259,9 @@ fn get_schema_info(py: Python<'_>, scheme: Option<&str>) -> PyResult<Py<PyAny>> 
 fn octorules_wirefilter(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_expression, m)?)?;
     m.add_function(wrap_pyfunction!(get_schema_info, m)?)?;
+    m.add(
+        "UnknownSchemeError",
+        m.py().get_type::<UnknownSchemeError>(),
+    )?;
     Ok(())
 }
