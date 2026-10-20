@@ -22,6 +22,20 @@ except ImportError:
 pytestmark = pytest.mark.skipif(not HAS_WIREFILTER, reason="octorules-wirefilter not installed")
 
 
+# Keys present as lists in every result, success or error.
+_LIST_KEYS = (
+    "fields",
+    "functions",
+    "operators",
+    "string_literals",
+    "regex_literals",
+    "regex_field_pairs",
+    "ip_literals",
+    "int_literals",
+    "top_level_items",
+)
+
+
 class TestParseExpression:
     """Basic return-type and key contract tests."""
 
@@ -31,30 +45,12 @@ class TestParseExpression:
 
     def test_success_has_all_keys(self):
         result = parse_expression('http.host eq "example.com"')
-        for key in (
-            "fields",
-            "functions",
-            "operators",
-            "string_literals",
-            "regex_literals",
-            "regex_field_pairs",
-            "ip_literals",
-            "int_literals",
-        ):
+        for key in _LIST_KEYS:
             assert key in result, f"missing key: {key}"
 
     def test_success_values_are_lists(self):
         result = parse_expression('http.host eq "example.com"')
-        for key in (
-            "fields",
-            "functions",
-            "operators",
-            "string_literals",
-            "regex_literals",
-            "regex_field_pairs",
-            "ip_literals",
-            "int_literals",
-        ):
+        for key in _LIST_KEYS:
             assert isinstance(result[key], list), f"{key} is not a list"
 
     def test_error_on_unknown_field(self):
@@ -70,16 +66,7 @@ class TestParseExpression:
         """Parse error responses should include all standard keys for API consistency."""
         result = parse_expression("http.host eq eq")
         assert "error" in result
-        for key in (
-            "fields",
-            "functions",
-            "operators",
-            "string_literals",
-            "regex_literals",
-            "regex_field_pairs",
-            "ip_literals",
-            "int_literals",
-        ):
+        for key in _LIST_KEYS:
             assert key in result, f"Missing key {key!r} in error response"
             assert result[key] == []
 
@@ -531,16 +518,7 @@ class TestInputLimits:
         assert "error" in result
         assert "maximum length" in result["error"]
         # Error responses should include all standard keys for API consistency
-        for key in (
-            "fields",
-            "functions",
-            "operators",
-            "string_literals",
-            "regex_literals",
-            "regex_field_pairs",
-            "ip_literals",
-            "int_literals",
-        ):
+        for key in _LIST_KEYS:
             assert key in result, f"Missing key {key!r} in oversized error response"
             assert result[key] == []
 
@@ -1142,3 +1120,64 @@ class TestDocumentedFunctions:
     )
     def test_rejected(self, expr, reason):
         assert reason in parse_expression(expr).get("error", "")
+
+
+class TestTopLevelShape:
+    """`top_level_op` / `top_level_items` expose how the parser grouped the
+    expression's outermost operands. octorules-cloudflare checks the account
+    entry-point filter shape against them."""
+
+    @pytest.mark.parametrize(
+        ("expr", "op", "items"),
+        [
+            ('cf.zone.plan eq "ENT"', None, ["comparison"]),
+            ('(cf.zone.plan eq "ENT")', None, ["parenthesized"]),
+            ('not http.host eq "a"', None, ["unary"]),
+            ('any(http.request.headers.names[*] eq "x")', None, ["quantifier"]),
+            # `not` binds to the next simple expression only.
+            (
+                'not (http.host eq "a") and (cf.zone.plan eq "ENT")',
+                "and",
+                ["unary", "parenthesized"],
+            ),
+            (
+                '(not (http.host eq "a")) and (cf.zone.plan eq "ENT")',
+                "and",
+                ["parenthesized", "parenthesized"],
+            ),
+            # A chain of one operator is flat, not nested pairs.
+            (
+                '(http.host eq "a") and (http.host eq "b") and (cf.zone.plan eq "ENT")',
+                "and",
+                ["parenthesized", "parenthesized", "parenthesized"],
+            ),
+            # `and` binds tighter than `or`.
+            (
+                'http.host eq "a" or http.host eq "b" and cf.zone.plan eq "ENT"',
+                "or",
+                ["comparison", "combining"],
+            ),
+            ('http.host eq "a" xor http.host eq "b"', "xor", ["comparison", "comparison"]),
+        ],
+    )
+    def test_shape(self, expr, op, items):
+        result = parse_expression(expr)
+        assert "error" not in result, result.get("error")
+        assert result.get("top_level_op") == op
+        assert result["top_level_items"] == items
+
+    def test_op_absent_for_single_operand(self):
+        assert "top_level_op" not in parse_expression('http.host eq "a"')
+
+    def test_magic_firewall_scheme(self):
+        result = parse_expression(
+            '(tcp.dstport eq 22) and (ip.proto eq "tcp")', scheme="magic_firewall"
+        )
+        assert result["top_level_op"] == "and"
+        assert result["top_level_items"] == ["parenthesized", "parenthesized"]
+
+    @pytest.mark.parametrize("expr", ["", "   ", "http.host eq eq"])
+    def test_empty_or_error_has_no_shape(self, expr):
+        result = parse_expression(expr)
+        assert result["top_level_items"] == []
+        assert "top_level_op" not in result

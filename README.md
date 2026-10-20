@@ -108,8 +108,8 @@ result = parse_expression('bogus_field eq "x"')
 # {'error': '...', 'fields': [], 'functions': [], 'operators': [], ...}
 ```
 
-**Returns** a dict with keys `fields`, `functions`, `operators`, `string_literals`, `regex_literals`, `ip_literals`, `int_literals`, `regex_field_pairs` (all lists), plus:
-- On success: lists populated with extracted values. `regex_field_pairs` is a list of two-element lists `[[field, regex], ...]` showing which field each regex is matched against (e.g. `[["http.request.uri.path", "^/api"]]`); this shape is frozen and consumers may convert to tuples if desired. If AST nesting exceeded the depth limit, `depth_exceeded: true` is included.
+**Returns** a dict with keys `fields`, `functions`, `operators`, `string_literals`, `regex_literals`, `ip_literals`, `int_literals`, `regex_field_pairs`, `top_level_items` (all lists), plus:
+- On success: lists populated with extracted values. `regex_field_pairs` is a list of two-element lists `[[field, regex], ...]` showing which field each regex is matched against (e.g. `[["http.request.uri.path", "^/api"]]`); this shape is frozen and consumers may convert to tuples if desired. If AST nesting exceeded the depth limit, `depth_exceeded: true` is included. `top_level_items` gives the kind of each top-level operand (`comparison`, `parenthesized`, `unary`, `quantifier` or `combining`), and `top_level_op` (`and`, `or` or `xor`) is included when the top level chains two or more operands: `not (A) and (B)` gives `top_level_op: "and"`, `top_level_items: ["unary", "parenthesized"]`.
 - On failure: `error` (string) with all list keys present but empty.
 
 Expressions exceeding 1 MiB are rejected with an error dict before parsing.

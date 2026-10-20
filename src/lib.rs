@@ -16,7 +16,7 @@ mod scheme;
 mod visitor;
 
 use scheme::{SCHEME, SCHEME_MAGIC};
-use visitor::ExpressionExtractor;
+use visitor::{ExpressionExtractor, top_level_shape};
 
 /// Maximum allowed expression length (1 MiB).
 const MAX_EXPRESSION_LEN: usize = 1_048_576;
@@ -103,6 +103,7 @@ const RESULT_KEYS: &[&str] = &[
     "regex_field_pairs",
     "ip_literals",
     "int_literals",
+    "top_level_items",
 ];
 
 /// Populate a Python dict with empty lists for all standard result keys.
@@ -210,6 +211,11 @@ fn parse_expression(py: Python<'_>, expr: &str, scheme: Option<&str>) -> PyResul
     dict.set_item("regex_field_pairs", pairs)?;
     dict.set_item("ip_literals", PyList::new(py, &extractor.ip_literals)?)?;
     dict.set_item("int_literals", PyList::new(py, &extractor.int_literals)?)?;
+    let (top_level_op, top_level_items) = top_level_shape(ast.expression());
+    dict.set_item("top_level_items", PyList::new(py, top_level_items)?)?;
+    if let Some(op) = top_level_op {
+        dict.set_item("top_level_op", op)?;
+    }
     if extractor.depth_exceeded() {
         dict.set_item("depth_exceeded", true)?;
     }

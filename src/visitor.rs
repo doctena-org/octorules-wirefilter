@@ -39,6 +39,36 @@ fn field_name_of(index_expr: &IndexExpr) -> Option<String> {
     }
 }
 
+fn logical_op_name(op: &LogicalOp) -> &'static str {
+    match op {
+        LogicalOp::And => "and",
+        LogicalOp::Or => "or",
+        LogicalOp::Xor => "xor",
+    }
+}
+
+fn logical_kind(expr: &LogicalExpr) -> &'static str {
+    match expr {
+        LogicalExpr::Combining { .. } => "combining",
+        LogicalExpr::Comparison(_) => "comparison",
+        LogicalExpr::Parenthesized(_) => "parenthesized",
+        LogicalExpr::Unary { .. } => "unary",
+        LogicalExpr::Quantifier { .. } => "quantifier",
+    }
+}
+
+/// The operator chaining the expression's top-level operands (`None` when
+/// there is a single operand) and the kind of each operand.
+pub fn top_level_shape(expr: &LogicalExpr) -> (Option<&'static str>, Vec<&'static str>) {
+    match expr {
+        LogicalExpr::Combining { op, items } => (
+            Some(logical_op_name(op)),
+            items.iter().map(logical_kind).collect(),
+        ),
+        _ => (None, vec![logical_kind(expr)]),
+    }
+}
+
 /// Extracts all components from a wirefilter AST for the ExpressionInfo contract.
 pub struct ExpressionExtractor {
     pub fields: Vec<String>,
@@ -290,11 +320,7 @@ impl ExpressionExtractor {
         self.depth += 1;
         match expr {
             LogicalExpr::Combining { op, items } => {
-                self.add_operator(match op {
-                    LogicalOp::And => "and",
-                    LogicalOp::Or => "or",
-                    LogicalOp::Xor => "xor",
-                });
+                self.add_operator(logical_op_name(op));
                 for item in items {
                     self.walk_logical(item);
                 }
@@ -425,6 +451,61 @@ mod tests {
         let ex = extract_expr("cf.waf.score bitwise_and cf.waf.score.xss");
         assert!(ex.operators.contains(&"bitwise_and".to_string()));
         assert_eq!(ex.fields, vec!["cf.waf.score", "cf.waf.score.xss"]);
+    }
+
+    fn shape_of(expr: &str) -> (Option<&'static str>, Vec<&'static str>) {
+        top_level_shape(SCHEME.parse(expr).expect("parse failed").expression())
+    }
+
+    // ── Top-level shape ──────────────────────────────────────
+
+    #[test]
+    fn shape_single_comparison() {
+        assert_eq!(shape_of(r#"http.host eq "a""#), (None, vec!["comparison"]));
+    }
+
+    #[test]
+    fn shape_single_parenthesized() {
+        assert_eq!(
+            shape_of(r#"(http.host eq "a")"#),
+            (None, vec!["parenthesized"])
+        );
+    }
+
+    #[test]
+    fn shape_not_binds_to_next_group_only() {
+        // `not (X) and (Y)` is `(not (X)) and (Y)`: a unary, then a group.
+        assert_eq!(
+            shape_of(r#"not (http.host eq "a") and (http.host eq "b")"#),
+            (Some("and"), vec!["unary", "parenthesized"])
+        );
+    }
+
+    #[test]
+    fn shape_same_op_chain_is_flat() {
+        assert_eq!(
+            shape_of(r#"(http.host eq "a") and (http.host eq "b") and (http.host eq "c")"#),
+            (
+                Some("and"),
+                vec!["parenthesized", "parenthesized", "parenthesized"]
+            )
+        );
+    }
+
+    #[test]
+    fn shape_and_binds_tighter_than_or() {
+        assert_eq!(
+            shape_of(r#"http.host eq "a" or http.host eq "b" and http.host eq "c""#),
+            (Some("or"), vec!["comparison", "combining"])
+        );
+    }
+
+    #[test]
+    fn shape_xor_and_quantifier() {
+        assert_eq!(
+            shape_of(r#"any(http.request.headers.names[*] eq "x") xor http.host eq "a""#),
+            (Some("xor"), vec!["quantifier", "comparison"])
+        );
     }
 
     // ── Deduplication ────────────────────────────────────────

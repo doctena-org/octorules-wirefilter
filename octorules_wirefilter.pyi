@@ -27,6 +27,11 @@ def parse_expression(expr: str, scheme: str | None = None) -> dict[str, Any]:
         for `matches` operators with a plain field on the left-hand side.
       - `ip_literals`: list of IP address/range literals (strings).
       - `int_literals`: list of integer literals (ints).
+      - `top_level_items`: kind of each top-level operand, in order: one of
+        "comparison", "parenthesized", "unary", "quantifier", "combining".
+        A single-operand expression has one entry.
+      - `top_level_op` (optional): "and", "or" or "xor" when the top level
+        chains two or more operands with that operator.
       - `error` (optional): error message (string) if parsing failed. Present
         with all list keys as empty lists.
       - `depth_exceeded` (optional): boolean `true` if AST nesting exceeded the
