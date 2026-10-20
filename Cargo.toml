@@ -23,4 +23,4 @@ pyo3 = { version = "0.29", features = ["extension-module"] }
 # default-features = false skips get-size2 (LhsValue memory accounting, an
 # execution-side concern; we only parse). "regex" stays: the scheme has
 # regex-typed fields and matches() support.
-wirefilter-engine = { git = "https://github.com/cloudflare/wirefilter", rev = "ec8e24e26e2707a88034bfe161beeb2a4f51f8df", default-features = false, features = ["regex"] }
+wirefilter-engine = { git = "https://github.com/cloudflare/wirefilter", rev = "2efaf3b6b80fde0e9fcf091abe5292fb95d7eae6", default-features = false, features = ["regex"] }

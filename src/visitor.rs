@@ -7,9 +7,9 @@ use std::net::IpAddr;
 use std::ops::RangeInclusive;
 
 use wirefilter::{
-    ComparisonExpr, ComparisonOpExpr, ExplicitIpRange, FunctionCallArgExpr, IdentifierExpr,
-    IndexExpr, IntOp, IntRange, IpRange, LogicalExpr, LogicalOp, OrderingOp, QuantifierArgExpr,
-    QuantifierOp, RhsValue, RhsValues, UnaryOp,
+    ComparisonExpr, ComparisonOpExpr, ComparisonRhs, ExplicitIpRange, FunctionCallArgExpr,
+    IdentifierExpr, IndexExpr, IntOp, IntRange, IntRhs, IpRange, LiteralSet, LiteralValue,
+    LogicalExpr, LogicalOp, OrderingOp, QuantifierArgExpr, QuantifierOp, UnaryOp,
 };
 
 /// Maximum nesting depth before the extractor stops descending.
@@ -118,14 +118,14 @@ impl ExpressionExtractor {
     }
 
     /// Extract RHS value literals.
-    fn extract_rhs_value(&mut self, rhs: &RhsValue) {
+    fn extract_rhs_value(&mut self, rhs: &LiteralValue) {
         match rhs {
-            RhsValue::Bytes(bytes_expr) => {
+            LiteralValue::Bytes(bytes_expr) => {
                 self.add_string(&String::from_utf8_lossy(bytes_expr));
             }
-            RhsValue::Int(i) => self.add_int(*i),
-            RhsValue::Ip(addr) => self.extract_ip(addr),
-            RhsValue::Bool(_) | RhsValue::Array(_) | RhsValue::Map(_) => {}
+            LiteralValue::Int(i) => self.add_int(*i),
+            LiteralValue::Ip(addr) => self.extract_ip(addr),
+            LiteralValue::Bool(_) | LiteralValue::Array(_) | LiteralValue::Map(_) => {}
         }
     }
 
@@ -161,25 +161,25 @@ impl ExpressionExtractor {
         }
     }
 
-    /// Extract literals from an RhsValues set (used in `in {...}` expressions).
-    fn extract_rhs_values(&mut self, values: &RhsValues) {
+    /// Extract literals from a LiteralSet (used in `in {...}` expressions).
+    fn extract_rhs_values(&mut self, values: &LiteralSet) {
         match values {
-            RhsValues::Bytes(items) => {
+            LiteralSet::Bytes(items) => {
                 for item in items {
                     self.add_string(&String::from_utf8_lossy(item));
                 }
             }
-            RhsValues::Int(ranges) => {
+            LiteralSet::Int(ranges) => {
                 for range in ranges {
                     self.extract_int_range(range);
                 }
             }
-            RhsValues::Ip(ranges) => {
+            LiteralSet::Ip(ranges) => {
                 for range in ranges {
                     self.extract_ip_range(range);
                 }
             }
-            RhsValues::Bool(_) | RhsValues::Array(_) | RhsValues::Map(_) => {}
+            LiteralSet::Bool(_) | LiteralSet::Array(_) | LiteralSet::Map(_) => {}
         }
     }
 
@@ -198,13 +198,19 @@ impl ExpressionExtractor {
                     OrderingOp::LessThan => "lt",
                     OrderingOp::LessThanEqual => "le",
                 });
-                self.extract_rhs_value(rhs);
+                match rhs {
+                    ComparisonRhs::Literal(value) => self.extract_rhs_value(value),
+                    ComparisonRhs::Index(expr) => self.walk_index_expr(expr.as_index_expr()),
+                }
             }
             ComparisonOpExpr::Int { op, rhs } => {
                 self.add_operator(match op {
                     IntOp::BitwiseAnd => "bitwise_and",
                 });
-                self.add_int(*rhs);
+                match rhs {
+                    IntRhs::Literal(i) => self.add_int(*i),
+                    IntRhs::Index(expr) => self.walk_index_expr(expr.as_index_expr()),
+                }
             }
             ComparisonOpExpr::Contains(bytes_expr) => {
                 self.add_operator("contains");
@@ -390,6 +396,35 @@ mod tests {
         let mut ex = ExpressionExtractor::new();
         ex.extract(ast.expression());
         ex
+    }
+
+    // ── Field or function on the right-hand side ─────────────
+
+    #[test]
+    fn rhs_field_extracted() {
+        let ex = extract_expr("http.request.uri.path ne raw.http.request.uri.path");
+        assert_eq!(
+            ex.fields,
+            vec!["http.request.uri.path", "raw.http.request.uri.path"]
+        );
+        assert!(ex.string_literals.is_empty());
+    }
+
+    #[test]
+    fn rhs_function_extracted() {
+        let ex = extract_expr("len(http.request.uri.path) gt len(http.request.uri.query)");
+        assert_eq!(ex.functions, vec!["len"]);
+        assert_eq!(
+            ex.fields,
+            vec!["http.request.uri.path", "http.request.uri.query"]
+        );
+    }
+
+    #[test]
+    fn rhs_int_field_extracted() {
+        let ex = extract_expr("cf.waf.score bitwise_and cf.waf.score.xss");
+        assert!(ex.operators.contains(&"bitwise_and".to_string()));
+        assert_eq!(ex.fields, vec!["cf.waf.score", "cf.waf.score.xss"]);
     }
 
     // ── Deduplication ────────────────────────────────────────

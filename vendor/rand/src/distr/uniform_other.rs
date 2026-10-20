@@ -10,8 +10,8 @@
 //! `UniformChar`, `UniformDuration` implementations
 
 use super::{Error, SampleBorrow, SampleUniform, Uniform, UniformInt, UniformSampler};
-use crate::distr::Distribution;
 use crate::Rng;
+use crate::distr::Distribution;
 use core::time::Duration;
 
 #[cfg(feature = "serde")]
@@ -68,7 +68,7 @@ impl UniformSampler for UniformChar {
     type X = char;
 
     #[inline] // if the range is constant, this helps LLVM to do the
-              // calculations at compile-time.
+    // calculations at compile-time.
     fn new<B1, B2>(low_b: B1, high_b: B2) -> Result<Self, Error>
     where
         B1: SampleBorrow<Self::X> + Sized,
@@ -81,7 +81,7 @@ impl UniformSampler for UniformChar {
     }
 
     #[inline] // if the range is constant, this helps LLVM to do the
-              // calculations at compile-time.
+    // calculations at compile-time.
     fn new_inclusive<B1, B2>(low_b: B1, high_b: B2) -> Result<Self, Error>
     where
         B1: SampleBorrow<Self::X> + Sized,
@@ -98,10 +98,9 @@ impl UniformSampler for UniformChar {
         if x >= CHAR_SURROGATE_START {
             x += CHAR_SURROGATE_LEN;
         }
-        // SAFETY: x must not be in surrogate range or greater than char::MAX.
-        // This relies on range constructors which accept char arguments.
-        // Validity of input char values is assumed.
-        unsafe { core::char::from_u32_unchecked(x) }
+
+        char::from_u32(x)
+            .expect("rand::distr::uniform::UniformChar: invalid Unicode scalar value (likely memory corruption)")
     }
 }
 
@@ -261,13 +260,14 @@ impl UniformSampler for UniformDuration {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RngExt;
 
     #[test]
     #[cfg(feature = "serde")]
     fn test_serialization_uniform_duration() {
         let distr = UniformDuration::new(Duration::from_secs(10), Duration::from_secs(60)).unwrap();
         let de_distr: UniformDuration =
-            bincode::deserialize(&bincode::serialize(&distr).unwrap()).unwrap();
+            postcard::from_bytes(&postcard::to_allocvec(&distr).unwrap()).unwrap();
         assert_eq!(distr, de_distr);
     }
 
@@ -316,19 +316,26 @@ mod tests {
     #[test]
     #[cfg(feature = "serde")]
     fn test_char_bad_deser() {
-        let json = r#"{"sampler":{"low":4294967200,"range":0,"thresh":0}}"#;
-        let result = serde_json::from_str::<Uniform<char>>(json);
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert_eq!(err.classify(), serde_json::error::Category::Data);
+        fn do_test(json: &str, col: usize) {
+            let result = serde_json::from_str::<Uniform<char>>(json);
+            assert!(result.is_err());
+            let err = result.unwrap_err();
+            assert_eq!(err.classify(), serde_json::error::Category::Data);
 
-        #[cfg(feature = "alloc")]
-        {
-            assert_eq!(
-                alloc::string::ToString::to_string(&err),
-                "bad sampler range for UniformChar at line 1 column 51"
-            );
+            #[cfg(feature = "alloc")]
+            {
+                let msg =
+                    alloc::format!("bad sampler range for UniformChar at line 1 column {col}");
+                assert_eq!(alloc::string::ToString::to_string(&err), msg);
+            }
         }
+
+        do_test(r#"{"sampler":{"low":5,"range":0,"thresh":0}}"#, 42);
+        do_test(r#"{"sampler":{"low":4294967200,"range":0,"thresh":0}}"#, 51);
+        do_test(
+            r#"{"sampler":{"low":4294967280,"range":32,"thresh":0}}"#,
+            52,
+        );
     }
 
     #[test]

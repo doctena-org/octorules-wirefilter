@@ -8,10 +8,10 @@
 
 **Exact pin:**
 ```toml
-wirefilter-engine = { git = "https://github.com/cloudflare/wirefilter", rev = "ec8e24e26e2707a88034bfe161beeb2a4f51f8df", default-features = false, features = ["regex"] }
+wirefilter-engine = { git = "https://github.com/cloudflare/wirefilter", rev = "2efaf3b6b80fde0e9fcf091abe5292fb95d7eae6", default-features = false, features = ["regex"] }
 ```
 
-**Commit:** `ec8e24e26e2707a88034bfe161beeb2a4f51f8df` (upstream master, 2026-07-27)
+**Commit:** `2efaf3b6b80fde0e9fcf091abe5292fb95d7eae6` (upstream master, 2026-10-19)
 
 **Features:** `default-features = false` skips `get-size2` (LhsValue memory
 accounting — an execution-side concern; this crate only parses). `regex`
@@ -21,21 +21,31 @@ stays on: the scheme has regex-typed fields and `matches()` support.
 
 To update the wirefilter-engine pin to a newer commit:
 
-1. Update `Cargo.toml`: change the `rev` field to the desired commit SHA.
-2. Test the update:
+1. Set the new SHA in `Cargo.toml` (`rev`) and in `.cargo/config.toml` (the `[source."git+…?rev=…"]` table name and its `rev`).
+2. Refresh `Cargo.lock` and `vendor/` with the source replacement removed. Cargo also reads `.cargo/config.toml` from parent directories, so a worktree nested in the main checkout still sees the old rev's replacement; work in a copy outside the checkout:
+   ```bash
+   tmp=$(mktemp -d)
+   tar --exclude=.git --exclude=target -cf - . | tar -xf - -C "$tmp"
+   (cd "$tmp" && mv .cargo/config.toml config.toml.keep \
+     && cargo update -p wirefilter-engine && cargo vendor --locked vendor)
+   rm -rf vendor && cp -a "$tmp/vendor" vendor && cp "$tmp/Cargo.lock" Cargo.lock
+   ```
+   Then fix any engine API changes in `src/` until `cargo build --offline` passes.
+3. Test the update:
    ```bash
    cargo fmt --check
    cargo clippy --all-targets
    cargo test --all
    ```
-3. Run the full integration test suite (includes field-count assertions):
+4. Run the full integration test suite (includes field-count assertions):
    ```bash
    # Verify 169 HTTP fields and 36 callable functions (34 registered + native any/all)
    # Verify 33 Magic Transit (Layer-4) fields
    pytest tests/
    ```
-4. Run the octorules-cloudflare test suite as the integration gate (ensure CF's lint still works with the new engine).
-5. Create a commit with a clear message: "Pin wirefilter-engine to commit XXXXX" (with rationale in the commit body if applicable).
+5. Run the octorules-cloudflare test suite as the integration gate (ensure CF's lint still works with the new engine).
+6. Diff `parse_expression` output between wheels built before and after the bump over real rules files and the test suites' expressions. Every difference goes in the CHANGELOG.
+7. Create a commit with a clear message: "Pin wirefilter-engine to commit XXXXX" (with rationale in the commit body if applicable).
 
 ## Divergence Policy
 

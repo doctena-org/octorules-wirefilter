@@ -29,8 +29,8 @@ fn stub_fn<'a>(_args: FunctionArgs<'_, 'a>) -> Option<LhsValue<'a>> {
 /// Helper: build a `SimpleFunctionDefinition` with given params and return type.
 fn simple_fn(params: Vec<SimpleFunctionParam>, return_type: Type) -> SimpleFunctionDefinition {
     SimpleFunctionDefinition {
-        params,
-        opt_params: vec![],
+        params: params.into(),
+        opt_params: Box::new([]),
         return_type,
         implementation: SimpleFunctionImpl::new(stub_fn),
     }
@@ -43,8 +43,8 @@ fn simple_fn_with_opts(
     return_type: Type,
 ) -> SimpleFunctionDefinition {
     SimpleFunctionDefinition {
-        params,
-        opt_params,
+        params: params.into(),
+        opt_params: opt_params.into(),
         return_type,
         implementation: SimpleFunctionImpl::new(stub_fn),
     }

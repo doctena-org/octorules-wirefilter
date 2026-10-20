@@ -1043,3 +1043,54 @@ class TestQuantifiersInParseOutput:
             'any(http.request.headers.names[*] == "x" || http.request.headers.names[*] == "y")'
         )
         assert "error" in result
+
+
+class TestComparisonRightHandSide:
+    """A field, indexed value or function result may sit on the right of an
+    equality or ordering comparison, as Cloudflare's Rules language documents;
+    its fields and functions are reported like the left side's."""
+
+    @pytest.mark.parametrize(
+        ("expr", "fields", "functions"),
+        [
+            (
+                "http.request.uri.path ne raw.http.request.uri.path",
+                ["http.request.uri.path", "raw.http.request.uri.path"],
+                [],
+            ),
+            (
+                "len(http.request.uri.path) gt len(http.request.uri.query)",
+                ["http.request.uri.path", "http.request.uri.query"],
+                ["len"],
+            ),
+            (
+                'http.request.uri.args["first"][0] eq http.request.uri.args["second"][0]',
+                ["http.request.uri.args"],
+                [],
+            ),
+            ("http.host ne lower(http.host)", ["http.host"], ["lower"]),
+            ("ip.src eq ip.src", ["ip.src"], []),
+            ("cf.waf.score bitwise_and cf.waf.score.xss", ["cf.waf.score", "cf.waf.score.xss"], []),
+        ],
+    )
+    def test_rhs_parses_and_is_extracted(self, expr, fields, functions):
+        result = parse_expression(expr)
+        assert "error" not in result, result.get("error")
+        assert result["fields"] == fields
+        assert result["functions"] == functions
+
+    def test_rhs_must_match_lhs_type(self):
+        assert "error" in parse_expression("http.host eq cf.waf.score")
+
+
+class TestByteStringLiterals:
+    """Upstream accepts only the colon-separated byte-string form."""
+
+    def test_colon_separated_parses(self):
+        result = parse_expression("http.host eq 61:62:63")
+        assert "error" not in result, result.get("error")
+        assert result["string_literals"] == ["abc"]
+
+    @pytest.mark.parametrize("literal", ["61.62.63", "61-62-63"])
+    def test_dotted_and_dashed_are_errors(self, literal):
+        assert "error" in parse_expression(f"http.host eq {literal}")

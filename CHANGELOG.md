@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- A comparison may have a field, indexed value or function call on its right-hand side (`http.request.uri.path ne raw.http.request.uri.path`), as Cloudflare's Rules language allows; its fields and functions are reported.
+
+### Changed
+- wirefilter-engine updated to upstream `2efaf3b` (2026-10-19). Dotted and dashed byte-string literals (`61.62.63`, `61-62-63`) are now parse errors; the colon form (`61:62:63`) is unchanged.
+
 ## [0.6.0] - 2026-09-16
 
 ### Added
