@@ -39,7 +39,7 @@ To update the wirefilter-engine pin to a newer commit:
    ```
 4. Run the full integration test suite (includes field-count assertions):
    ```bash
-   # Verify 169 HTTP fields and 36 callable functions (34 registered + native any/all)
+   # Verify 169 HTTP fields and 41 callable functions (39 registered + native any/all)
    # Verify 33 Magic Transit (Layer-4) fields
    pytest tests/
    ```

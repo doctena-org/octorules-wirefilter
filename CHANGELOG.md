@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- The functions `coalesce`, `hash_in_range`, `trim`, `trim_start` and `trim_end`, with the argument rules Cloudflare's API enforces. `hash_in_range` takes one seed; the docs show more, but the API rejects them.
 - A comparison may have a field, indexed value or function call on its right-hand side (`http.request.uri.path ne raw.http.request.uri.path`), as Cloudflare's Rules language allows; its fields and functions are reported.
 
 ### Changed

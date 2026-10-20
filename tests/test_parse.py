@@ -1094,3 +1094,51 @@ class TestByteStringLiterals:
     @pytest.mark.parametrize("literal", ["61.62.63", "61-62-63"])
     def test_dotted_and_dashed_are_errors(self, literal):
         assert "error" in parse_expression(f"http.host eq {literal}")
+
+
+class TestDocumentedFunctions:
+    """coalesce, hash_in_range and the trim functions, with the argument rules
+    Cloudflare's API enforced in a live probe on 2026-10-20."""
+
+    def test_listed_in_schema_info(self):
+        functions = set(get_schema_info()["functions"])
+        assert {"coalesce", "hash_in_range", "trim", "trim_start", "trim_end"} <= functions
+
+    @pytest.mark.parametrize(
+        ("expr", "functions"),
+        [
+            (
+                'http.request.uri.path eq coalesce(http.request.uri.args["expected_path"][0], "/")',
+                ["coalesce"],
+            ),
+            ("hash_in_range(0, 100, cf.random_seed) lt 10", ["hash_in_range"]),
+            ('trim(http.request.uri.path, "/") eq "blog"', ["trim"]),
+            ('trim_start(http.request.uri.path, "/") eq "blog"', ["trim_start"]),
+            ('trim_end(lower(http.host)) eq "x"', ["trim_end", "lower"]),
+            ("coalesce(ssl, cf.client.bot)", ["coalesce"]),
+            ("hash_in_range(0, 100, ip.src) lt 10", ["hash_in_range"]),
+        ],
+    )
+    def test_accepted(self, expr, functions):
+        result = parse_expression(expr)
+        assert "error" not in result, result.get("error")
+        assert result["functions"] == functions
+
+    @pytest.mark.parametrize(
+        ("expr", "reason"),
+        [
+            ("http.host eq coalesce(http.host)", "invalid number of arguments"),
+            (
+                "hash_in_range(0, 100, ip.src, http.host) lt 10",
+                "invalid number of arguments",
+            ),
+            (
+                "hash_in_range(5, 5, cf.random_seed) lt 10",
+                "Max integer for range must be higher than min integer",
+            ),
+            ('trim(" x ") eq "x"', "expected argument of kind Field, but got Literal"),
+            ('trim_start(http.host, "//") eq "x"', "byte set must not contain duplicated bytes"),
+        ],
+    )
+    def test_rejected(self, expr, reason):
+        assert reason in parse_expression(expr).get("error", "")

@@ -3,7 +3,7 @@
 //! Registers Cloudflare fields and functions with their types.
 //! A single scheme is built once and cached in a `LazyLock` static:
 //!
-//! - `SCHEME` — 178 fields (incl. `http.request.uri.path`), 34 registered functions (+ native `any`/`all`).
+//! - `SCHEME` — 178 fields (incl. `http.request.uri.path`), 39 registered functions (+ native `any`/`all`).
 //!
 //! # Panics
 //!
@@ -13,17 +13,152 @@
 //! (e.g. duplicate field name, wrong type) and should be caught immediately
 //! rather than silently ignored.
 
+use std::iter::once;
 use std::sync::LazyLock;
 
 use wirefilter::{
-    AlwaysList, ConcatFunction, FunctionArgs, GetType, LhsValue, Scheme, SchemeBuilder,
-    SimpleFunctionArgKind, SimpleFunctionDefinition, SimpleFunctionImpl, SimpleFunctionOptParam,
-    SimpleFunctionParam, Type,
+    AlwaysList, BytesExpr, CompiledFunction, ConcatFunction, ExpectedType, FunctionArgs,
+    FunctionDefinition, FunctionDefinitionContext, FunctionParam, FunctionParamError, GetType,
+    LhsValue, ParserSettings, Scheme, SchemeBuilder, SimpleFunctionArgKind,
+    SimpleFunctionDefinition, SimpleFunctionImpl, SimpleFunctionOptParam, SimpleFunctionParam,
+    Type,
 };
 
 /// Stub function implementation that returns None (field value passthrough).
 fn stub_fn<'a>(_args: FunctionArgs<'_, 'a>) -> Option<LhsValue<'a>> {
     None
+}
+
+type Params<'p, 'a> = &'p mut dyn ExactSizeIterator<Item = FunctionParam<'a>>;
+
+/// `coalesce(value1 T, value2 T [, ...]): T`, T one of Bytes, Int, IP or Bool.
+#[derive(Debug)]
+struct CoalesceFunction;
+
+impl FunctionDefinition for CoalesceFunction {
+    fn check_param(
+        &self,
+        _: &ParserSettings,
+        params: Params<'_, '_>,
+        next_param: &FunctionParam<'_>,
+        _: Option<&mut FunctionDefinitionContext>,
+    ) -> Result<(), FunctionParamError> {
+        match params.next() {
+            Some(first) => next_param.expect_val_type(once(first.get_type().into())),
+            None => next_param.expect_val_type(
+                [Type::Bytes, Type::Int, Type::Ip, Type::Bool]
+                    .into_iter()
+                    .map(ExpectedType::from),
+            ),
+        }
+    }
+
+    fn return_type(&self, params: Params<'_, '_>, _: Option<&FunctionDefinitionContext>) -> Type {
+        params.next().unwrap().get_type()
+    }
+
+    fn arg_count(&self) -> (usize, Option<usize>) {
+        (2, None)
+    }
+
+    fn compile(&self, _: Params<'_, '_>, _: Option<FunctionDefinitionContext>) -> CompiledFunction {
+        Box::new(stub_fn)
+    }
+}
+
+/// `hash_in_range(min Int, max Int, seed Bytes | Int | IP): Int`.
+///
+/// The bounds are literals with `max > min`; the seed is a field or function
+/// result. Cloudflare's docs show more seeds, but its API caps the call at 3
+/// arguments.
+#[derive(Debug)]
+struct HashInRangeFunction;
+
+impl FunctionDefinition for HashInRangeFunction {
+    fn check_param(
+        &self,
+        _: &ParserSettings,
+        params: Params<'_, '_>,
+        next_param: &FunctionParam<'_>,
+        _: Option<&mut FunctionDefinitionContext>,
+    ) -> Result<(), FunctionParamError> {
+        match params.len() {
+            0 => next_param.expect_const_value(|_: &i64| Ok(())),
+            1 => {
+                let min = *<&i64>::try_from(params.next().unwrap().as_constant()?)?;
+                next_param.expect_const_value(|max: &i64| {
+                    if *max > min {
+                        Ok(())
+                    } else {
+                        Err("Max integer for range must be higher than min integer".to_owned())
+                    }
+                })
+            }
+            _ => {
+                next_param.as_variable()?;
+                next_param.expect_val_type(
+                    [Type::Bytes, Type::Int, Type::Ip]
+                        .into_iter()
+                        .map(ExpectedType::from),
+                )
+            }
+        }
+    }
+
+    fn return_type(&self, _: Params<'_, '_>, _: Option<&FunctionDefinitionContext>) -> Type {
+        Type::Int
+    }
+
+    fn arg_count(&self) -> (usize, Option<usize>) {
+        (3, Some(0))
+    }
+
+    fn compile(&self, _: Params<'_, '_>, _: Option<FunctionDefinitionContext>) -> CompiledFunction {
+        Box::new(stub_fn)
+    }
+}
+
+/// `trim`, `trim_start`, `trim_end`: `(source Bytes, trim_set Bytes optional): Bytes`.
+///
+/// The source is a field or function result; the optional set is a literal
+/// without duplicate bytes.
+#[derive(Debug)]
+struct TrimFunction;
+
+impl FunctionDefinition for TrimFunction {
+    fn check_param(
+        &self,
+        _: &ParserSettings,
+        params: Params<'_, '_>,
+        next_param: &FunctionParam<'_>,
+        _: Option<&mut FunctionDefinitionContext>,
+    ) -> Result<(), FunctionParamError> {
+        if params.len() == 0 {
+            next_param.as_variable()?;
+            return next_param.expect_val_type(once(Type::Bytes.into()));
+        }
+        next_param.expect_const_value(|set: &BytesExpr| {
+            let mut seen = [false; 256];
+            for &byte in set.iter() {
+                if std::mem::replace(&mut seen[usize::from(byte)], true) {
+                    return Err("byte set must not contain duplicated bytes".to_owned());
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn return_type(&self, _: Params<'_, '_>, _: Option<&FunctionDefinitionContext>) -> Type {
+        Type::Bytes
+    }
+
+    fn arg_count(&self) -> (usize, Option<usize>) {
+        (1, Some(1))
+    }
+
+    fn compile(&self, _: Params<'_, '_>, _: Option<FunctionDefinitionContext>) -> CompiledFunction {
+        Box::new(stub_fn)
+    }
 }
 
 /// Helper: build a `SimpleFunctionDefinition` with given params and return type.
@@ -90,7 +225,7 @@ fn any_param(val_type: Type) -> SimpleFunctionParam {
     }
 }
 
-/// The wirefilter scheme — 178 fields, 34 registered functions (+ native `any`/`all`).
+/// The wirefilter scheme — 178 fields, 39 registered functions (+ native `any`/`all`).
 ///
 /// `http.request.uri.path` is registered as a regular field. octorules always
 /// uses this single scheme for all phases; transform-phase function-call syntax
@@ -647,7 +782,7 @@ fn register_magic_firewall_fields(b: &mut SchemeBuilder) {
     b.add_field("tcp.flags.urg", Type::Bool).unwrap();
 }
 
-/// Register the 34 functions shared by both schemes (`any`/`all` parse
+/// Register the 39 functions shared by both schemes (`any`/`all` parse
 /// natively as quantifiers and need no registration).
 ///
 /// Source: <https://developers.cloudflare.com/ruleset-engine/rules-language/functions/>
@@ -657,6 +792,12 @@ fn register_common_functions(b: &mut SchemeBuilder) {
     // (upstream af1a1e96).  They stay in COMMON_FUNCTION_NAMES because they
     // remain callable in expressions.
     b.add_function("concat", ConcatFunction::new()).unwrap();
+    b.add_function("coalesce", CoalesceFunction).unwrap();
+    b.add_function("hash_in_range", HashInRangeFunction)
+        .unwrap();
+    for name in ["trim", "trim_start", "trim_end"] {
+        b.add_function(name, TrimFunction).unwrap();
+    }
 
     // String transformation functions — Bytes → Bytes
     for name in ["lower", "upper", "url_decode", "uuidv4"] {
@@ -1102,6 +1243,11 @@ const COMMON_FUNCTION_NAMES: &[&str] = &[
     "wildcard_replace",
     "is_jwt_valid",
     "is_jwt_present",
+    "coalesce",
+    "hash_in_range",
+    "trim",
+    "trim_start",
+    "trim_end",
 ];
 
 #[cfg(test)]
@@ -1132,16 +1278,96 @@ mod tests {
     #[test]
     fn common_function_names_array_length() {
         // COMMON_FUNCTION_NAMES lists all functions exposed via get_schema_info().
-        assert_eq!(COMMON_FUNCTION_NAMES.len(), 36);
+        assert_eq!(COMMON_FUNCTION_NAMES.len(), 41);
     }
 
     #[test]
     fn scheme_has_all_functions() {
-        // 1 built-in (concat) + 33 custom = 34.  `any`/`all` left the
+        // 1 built-in (concat) + 38 custom = 39.  `any`/`all` left the
         // registry when upstream made them native quantifiers; they are
         // still callable (see quantifiers_parse_without_registration) and
         // still listed in COMMON_FUNCTION_NAMES.
-        assert_eq!(SCHEME.function_count(), 34);
+        assert_eq!(SCHEME.function_count(), 39);
+    }
+
+    // ── coalesce, hash_in_range, trim* (verdicts from the live API, 2026-10-20) ──
+
+    #[test]
+    fn documented_functions_accepted() {
+        for expr in [
+            r#"http.request.uri.path eq coalesce(http.request.uri.args["expected_path"][0], "/")"#,
+            r#"len(http.request.uri.path) gt coalesce(lookup_json_integer(http.request.uri.query, "n"), 0)"#,
+            "ip.src eq coalesce(ip.src, 192.0.2.1)",
+            r#"http.host eq coalesce(http.request.uri.args["a"][0], http.request.uri.args["b"][0], "x")"#,
+            r#"http.host eq coalesce("x", http.request.uri.args["a"][0])"#,
+            r#"http.host eq coalesce("x", "y")"#,
+            "hash_in_range(0, 100, cf.random_seed) lt 10",
+            r#"hash_in_range(0, 100, http.request.headers["x-id"][0]) lt 10"#,
+            "hash_in_range(0, 100, lower(http.host)) lt 10",
+            "hash_in_range(-10, 10, cf.random_seed) lt 0",
+            "hash_in_range(0, 100, cf.edge.server_port) lt 10",
+            "hash_in_range(0, 100, ip.src) lt 10",
+            "coalesce(ssl, cf.client.bot)",
+            r#"trim(http.request.uri.path) eq "/""#,
+            r#"trim(http.request.uri.path, "/") eq "blog""#,
+            r#"trim_start(http.request.uri.path, "/") eq "blog""#,
+            r#"trim_end(http.request.uri.path, "/") eq "blog""#,
+            r#"trim(lower(http.host)) eq "x""#,
+            r#"trim(http.host, "") eq "x""#,
+        ] {
+            assert!(SCHEME.parse(expr).is_ok(), "{expr}");
+        }
+    }
+
+    #[test]
+    fn documented_functions_rejected() {
+        for (expr, reason) in [
+            ("coalesce(ssl, false)", "unknown identifier"),
+            (
+                "http.host eq coalesce(http.host)",
+                "invalid number of arguments",
+            ),
+            (
+                "hash_in_range(0, 100, ip.src, http.host, cf.edge.server_port) lt 10",
+                "invalid number of arguments",
+            ),
+            (
+                r#"hash_in_range(0, 100, "abc") lt 10"#,
+                "expected argument of kind Field, but got Literal",
+            ),
+            (
+                "hash_in_range(100, 0, cf.random_seed) lt 10",
+                "Max integer for range must be higher than min integer",
+            ),
+            (
+                "hash_in_range(5, 5, cf.random_seed) lt 10",
+                "Max integer for range must be higher than min integer",
+            ),
+            (
+                "hash_in_range(cf.edge.server_port, 100000, cf.random_seed) lt 10",
+                "expected argument of kind Literal, but got Field",
+            ),
+            ("hash_in_range(0, 100) lt 10", "invalid number of arguments"),
+            (
+                r#"trim(" x ") eq "x""#,
+                "expected argument of kind Field, but got Literal",
+            ),
+            (
+                r#"trim(http.host, "//") eq "x""#,
+                "byte set must not contain duplicated bytes",
+            ),
+            (
+                r#"trim_end(http.host, "aa") eq "x""#,
+                "byte set must not contain duplicated bytes",
+            ),
+            (
+                r#"trim(http.host, http.host) eq "x""#,
+                "expected argument of kind Literal, but got Field",
+            ),
+        ] {
+            let err = SCHEME.parse(expr).expect_err(expr).to_string();
+            assert!(err.contains(reason), "{expr}: {err}");
+        }
     }
 
     // ── 2026 CF additions — verify presence ──

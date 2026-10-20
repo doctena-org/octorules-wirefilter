@@ -36,7 +36,7 @@ expression_bridge.py          Python-side routing layer
 
 Two wirefilter schemes are built at startup and cached:
 
-- **HTTP scheme** (default): 169 fields exposed via `get_schema_info()`, 36 functions.
+- **HTTP scheme** (default): 169 fields exposed via `get_schema_info()`, 41 functions.
 - **Magic Transit / Layer-4 scheme** (`magic_firewall`): 33 packet-level fields
   (`ip.proto`, `tcp.*`, `udp.*`, …) for account-level network phases.
 - **Named list support** — expressions like `ip.src in $my_list` parse
