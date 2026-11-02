@@ -53,7 +53,7 @@ The `scheme` parameter selects the field set: `"magic_firewall"` parses against 
 ### Prerequisites
 
 - Rust toolchain **>= 1.86**, edition 2024 (stable, via [rustup](https://rustup.rs/))
-- Python >= 3.10 with venv
+- Python >= 3.11 with venv
 - [maturin](https://github.com/PyO3/maturin) (`pip install maturin`)
 
 ### Development build
