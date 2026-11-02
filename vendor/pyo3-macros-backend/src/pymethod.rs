@@ -4,7 +4,9 @@ use std::ffi::CString;
 use crate::attributes::{FromPyWithAttribute, NameAttribute, RenamingRule};
 #[cfg(feature = "experimental-inspect")]
 use crate::introspection::unique_element_id;
-use crate::method::{CallingConvention, ExtractErrorMode, PyArg, SelfConversionPolicy};
+use crate::method::{
+    CallingConvention, ClassMethodReceiver, ExtractErrorMode, PyArg, SelfConversionPolicy,
+};
 use crate::params::{impl_arg_params, impl_regular_arg_param, Holders};
 use crate::pyfunction::WarningFactory;
 use crate::utils::PythonDoc;
@@ -189,6 +191,36 @@ enum PyMethodProtoKind {
     SlotFragment(&'static SlotFragmentDef),
 }
 
+impl PyMethodProtoKind {
+    /// Whether Python hands this protocol an `args`/`kwargs` pair.
+    ///
+    /// `tp_new`, `tp_init` and `tp_call` do, so they accept keyword arguments and a
+    /// `#[pyo3(signature = ...)]` has something to act on. Every other protocol is reached
+    /// through a slot wrapper with a fixed C-level signature: its parameters are positional-only
+    /// and a signature attribute would have nothing to unpack.
+    ///
+    /// Should `signature` ever be accepted on protocol methods just to supply type hints, only
+    /// the `ensure_no_forbidden_protocol_attributes` use goes away: which parameters Python sees
+    /// as positional-only is dictated by CPython, not by what the user declares.
+    fn takes_args_and_kwargs(&self) -> bool {
+        match self {
+            PyMethodProtoKind::Slot(slot) => slot.takes_args_and_kwargs(),
+            PyMethodProtoKind::Call => true,
+            PyMethodProtoKind::SlotFragment(_)
+            | PyMethodProtoKind::Traverse
+            | PyMethodProtoKind::Clear => false,
+        }
+    }
+
+    fn optional_trailing_args(&self) -> usize {
+        match self {
+            PyMethodProtoKind::Slot(slot) => slot.optional_trailing_args(),
+            PyMethodProtoKind::SlotFragment(fragment) => fragment.optional_trailing_args(),
+            PyMethodProtoKind::Call | PyMethodProtoKind::Traverse | PyMethodProtoKind::Clear => 0,
+        }
+    }
+}
+
 impl<'a> PyMethod<'a> {
     pub fn parse(
         sig: &'a mut syn::Signature,
@@ -197,10 +229,23 @@ impl<'a> PyMethod<'a> {
     ) -> Result<Self> {
         check_generic(sig)?;
         ensure_function_options_valid(&options)?;
-        let spec = FnSpec::parse(sig, meth_attrs, options)?;
+        let mut spec = FnSpec::parse(sig, meth_attrs, options)?;
 
         let method_name = spec.python_name.to_string();
         let kind = PyMethodKind::from_name(&method_name);
+
+        // The parameters of a method backed by a type slot are positional-only, record that in
+        // the signature. Nothing else can: `#[pyo3(signature = ...)]` is rejected for exactly
+        // these methods, see `ensure_no_forbidden_protocol_attributes`.
+        if let PyMethodKind::Proto(proto) = &kind {
+            if !proto.takes_args_and_kwargs() {
+                spec.signature
+                    .python_signature
+                    .make_all_parameters_positional_only();
+                spec.signature
+                    .default_trailing_parameters_to_none(proto.optional_trailing_args());
+            }
+        }
 
         Ok(Self {
             kind,
@@ -339,14 +384,7 @@ fn ensure_no_forbidden_protocol_attributes(
 ) -> syn::Result<()> {
     if let Some(signature) = &spec.signature.attribute {
         // __new__, __init__ and __call__ are allowed to have a signature, but nothing else is.
-        if !matches!(
-            proto_kind,
-            PyMethodProtoKind::Slot(SlotDef {
-                calling_convention: SlotCallingConvention::TpNew | SlotCallingConvention::TpInit,
-                ..
-            })
-        ) && !matches!(proto_kind, PyMethodProtoKind::Call)
-        {
+        if !proto_kind.takes_args_and_kwargs() {
             bail_spanned!(signature.kw.span() => format!("`signature` cannot be used with magic method `{}`", method_name));
         }
     }
@@ -383,6 +421,7 @@ pub fn impl_py_method_def(
         // instance of the owning type before reaching the C function. The
         // trusted path is therefore valid.
         unsafe { SelfConversionPolicy::trusted() },
+        ClassMethodReceiver::Class,
         ctx,
     )?;
     let methoddef = spec.get_methoddef(
@@ -410,6 +449,7 @@ fn impl_call_slot(cls: &syn::Type, spec: &FnSpec<'_>, ctx: &Ctx) -> Result<Metho
         // SAFETY: The `tp_call` slot is dispatched by CPython, which guarantees
         // the receiver is of the correct type.
         unsafe { SelfConversionPolicy::trusted() },
+        ClassMethodReceiver::Instance,
         ctx,
     )?;
     let slot_def = quote! {
@@ -515,7 +555,7 @@ fn impl_clear_slot(cls: &syn::Type, spec: &FnSpec<'_>, ctx: &Ctx) -> syn::Result
         pub unsafe extern "C" fn __pymethod___clear____(
             _slf: *mut #pyo3_path::ffi::PyObject,
         ) -> ::std::ffi::c_int {
-            #pyo3_path::impl_::pymethods::_call_clear(_slf, |py, _slf| {
+            #pyo3_path::impl_::pymethods::_call_clear::<#cls>(_slf, |py, _slf| {
                 #holders
                 let result = #fncall;
                 let result = #pyo3_path::impl_::wrap::converter(&result).wrap(result)?;
@@ -872,7 +912,6 @@ pub fn impl_py_getter_def(
                         { ::std::mem::offset_of!(#cls, #field) },
                         { #pyo3_path::impl_::pyclass::IsPyT::<#ty>::VALUE },
                         { #pyo3_path::impl_::pyclass::IsIntoPyObjectRef::<#ty>::VALUE },
-                        { #pyo3_path::impl_::pyclass::IsIntoPyObject::<#ty>::VALUE },
                     > = unsafe { #pyo3_path::impl_::pyclass::PyClassGetterGenerator::new() };
                     #generator
                 }
@@ -1065,27 +1104,26 @@ pub const __HASH__: SlotDef =
     ));
 pub const __RICHCMP__: SlotDef = SlotDef::new("Py_tp_richcompare", "richcmpfunc")
     .extract_error_mode(ExtractErrorMode::NotImplemented);
-const __GET__: SlotDef = SlotDef::new("Py_tp_descr_get", "descrgetfunc");
+const __GET__: SlotDef = SlotDef::new("Py_tp_descr_get", "descrgetfunc")
+    // `__get__($self, instance, owner=None, /)`
+    .with_optional_trailing_args(1);
 const __ITER__: SlotDef = SlotDef::new("Py_tp_iter", "getiterfunc");
-const __NEXT__: SlotDef = SlotDef::new("Py_tp_iternext", "iternextfunc")
-    .return_specialized_conversion(
-        TokenGenerator(|_| quote! { IterBaseKind, IterOptionKind, IterResultOptionKind }),
-        TokenGenerator(|_| quote! { iter_tag }),
-    );
+const __NEXT__: SlotDef = SlotDef::new("Py_tp_iternext", "iternextfunc").return_iter_conversion(
+    StaticIdent::new("IterNextOutput"),
+    StaticIdent::new("IterNextConvertFallback"),
+);
 const __AWAIT__: SlotDef = SlotDef::new("Py_am_await", "unaryfunc");
 const __AITER__: SlotDef = SlotDef::new("Py_am_aiter", "unaryfunc");
-const __ANEXT__: SlotDef = SlotDef::new("Py_am_anext", "unaryfunc").return_specialized_conversion(
-    TokenGenerator(
-        |_| quote! { AsyncIterBaseKind, AsyncIterOptionKind, AsyncIterResultOptionKind },
-    ),
-    TokenGenerator(|_| quote! { async_iter_tag }),
+const __ANEXT__: SlotDef = SlotDef::new("Py_am_anext", "unaryfunc").return_iter_conversion(
+    StaticIdent::new("AsyncIterNextOutput"),
+    StaticIdent::new("AsyncIterNextConvertFallback"),
 );
 pub const __LEN__: SlotDef = SlotDef::new("Py_mp_length", "lenfunc");
 const __CONTAINS__: SlotDef = SlotDef::new("Py_sq_contains", "objobjproc");
 const __CONCAT__: SlotDef = SlotDef::new("Py_sq_concat", "binaryfunc");
 const __REPEAT__: SlotDef = SlotDef::new("Py_sq_repeat", "ssizeargfunc");
-const __INPLACE_CONCAT__: SlotDef = SlotDef::new("Py_sq_concat", "binaryfunc");
-const __INPLACE_REPEAT__: SlotDef = SlotDef::new("Py_sq_repeat", "ssizeargfunc");
+const __INPLACE_CONCAT__: SlotDef = SlotDef::new("Py_sq_inplace_concat", "binaryfunc");
+const __INPLACE_REPEAT__: SlotDef = SlotDef::new("Py_sq_inplace_repeat", "ssizeargfunc");
 pub const __GETITEM__: SlotDef = SlotDef::new("Py_mp_subscript", "binaryfunc");
 
 const __POS__: SlotDef = SlotDef::new("Py_nb_positive", "unaryfunc");
@@ -1204,6 +1242,7 @@ impl Ty {
                 let ty = arg.ty();
                 extract_error_mode.handle_error(
                     quote! {
+                            #[allow(unreachable_code, reason = "error type might be !")]
                             ::std::convert::TryInto::<#ty>::try_into(#ident).map_err(|e| #pyo3_path::exceptions::PyValueError::new_err(e.to_string()))
                     },
                     ctx
@@ -1270,7 +1309,10 @@ fn extract_object(
 enum ReturnMode {
     ReturnSelf,
     Conversion(TokenGenerator),
-    SpecializedConversion(TokenGenerator, TokenGenerator),
+    /// `__next__` / `__anext__`: the return value goes through the wrapper named first, whose
+    /// inherent `convert` handles the return types saying "iteration is over" with `None`, and
+    /// whose fallback trait, named second, handles all the others.
+    IterConversion(StaticIdent, StaticIdent),
 }
 
 impl ReturnMode {
@@ -1284,13 +1326,15 @@ impl ReturnMode {
                     #pyo3_path::impl_::callback::convert(py, _result)
                 }
             }
-            ReturnMode::SpecializedConversion(traits, tag) => {
-                let traits = TokenGeneratorCtx(*traits, ctx);
-                let tag = TokenGeneratorCtx(*tag, ctx);
+            ReturnMode::IterConversion(wrapper, fallback) => {
                 quote! {
                     let _result = #call;
-                    use #pyo3_path::impl_::pymethods::{#traits};
-                    (&_result).#tag().convert(py, _result)
+                    #[allow(
+                        unused_imports,
+                        reason = "the fallback trait is unused when the inherent `convert` applies"
+                    )]
+                    use #pyo3_path::impl_::pymethods::#fallback as _;
+                    #pyo3_path::impl_::pymethods::#wrapper(_result).convert(py)
                 }
             }
             ReturnMode::ReturnSelf => quote! {
@@ -1311,6 +1355,7 @@ pub struct SlotDef {
     extract_error_mode: ExtractErrorMode,
     return_mode: Option<ReturnMode>,
     require_unsafe: bool,
+    optional_trailing_args: usize,
 }
 
 enum SlotCallingConvention {
@@ -1322,6 +1367,30 @@ enum SlotCallingConvention {
 }
 
 impl SlotDef {
+    /// Whether this slot receives Python's `args`/`kwargs` pair rather than a fixed set of
+    /// positional arguments.
+    ///
+    /// Only `tp_new` and `tp_init` do; every other slot is exposed to Python through a slot
+    /// wrapper which rejects keyword arguments, e.g. `__eq__` has the signature
+    /// `($self, value, /)`.
+    pub const fn takes_args_and_kwargs(&self) -> bool {
+        matches!(
+            self.calling_convention,
+            SlotCallingConvention::TpNew | SlotCallingConvention::TpInit
+        )
+    }
+
+    /// How many trailing arguments CPython's slot wrapper lets the caller omit, each of which
+    /// reaches the slot as `None`.
+    pub const fn optional_trailing_args(&self) -> usize {
+        self.optional_trailing_args
+    }
+
+    const fn with_optional_trailing_args(mut self, count: usize) -> Self {
+        self.optional_trailing_args = count;
+        self
+    }
+
     const fn new(slot: &'static str, func_ty: &'static str) -> Self {
         // The FFI function pointer type determines the arguments and return type
         let (calling_convention, ret_ty) = match func_ty.as_bytes() {
@@ -1377,6 +1446,7 @@ impl SlotDef {
             extract_error_mode: ExtractErrorMode::Raise,
             return_mode: None,
             require_unsafe: false,
+            optional_trailing_args: 0,
         }
     }
 
@@ -1392,12 +1462,8 @@ impl SlotDef {
         self
     }
 
-    const fn return_specialized_conversion(
-        mut self,
-        traits: TokenGenerator,
-        tag: TokenGenerator,
-    ) -> Self {
-        self.return_mode = Some(ReturnMode::SpecializedConversion(traits, tag));
+    const fn return_iter_conversion(mut self, wrapper: StaticIdent, fallback: StaticIdent) -> Self {
+        self.return_mode = Some(ReturnMode::IterConversion(wrapper, fallback));
         self
     }
 
@@ -1432,6 +1498,8 @@ impl SlotDef {
             ret_ty,
             return_mode,
             require_unsafe,
+            // introspection only, not part of codegen
+            optional_trailing_args: _,
         } = self;
         if *require_unsafe {
             ensure_spanned!(
@@ -1500,9 +1568,19 @@ fn generate_method_body(
         pyo3_path,
         output_span,
     } = ctx;
-    let self_arg = spec
-        .tp
-        .self_arg(Some(cls), extract_error_mode, self_conversion, holders, ctx);
+    let self_arg = spec.tp.self_arg(
+        Some(cls),
+        extract_error_mode,
+        self_conversion,
+        match calling_convention {
+            SlotCallingConvention::TpNew => ClassMethodReceiver::Class,
+            SlotCallingConvention::TpInit | SlotCallingConvention::FixedArguments(_) => {
+                ClassMethodReceiver::Instance
+            }
+        },
+        holders,
+        ctx,
+    );
     let rust_name = spec.name;
     let warnings = spec.warnings.build_py_warning(ctx);
 
@@ -1640,6 +1718,7 @@ struct SlotFragmentDef {
     /// Those fragments must use `Checked` so that a type mismatch returns
     /// `NotImplemented` instead of causing undefined behaviour.
     self_conversion: SelfConversionPolicy,
+    optional_trailing_args: usize,
 }
 
 impl SlotFragmentDef {
@@ -1650,6 +1729,7 @@ impl SlotFragmentDef {
             extract_error_mode: ExtractErrorMode::Raise,
             ret_ty: Ty::Void,
             self_conversion: SelfConversionPolicy::checked(),
+            optional_trailing_args: 0,
         }
     }
 
@@ -1669,6 +1749,7 @@ impl SlotFragmentDef {
             extract_error_mode: ExtractErrorMode::NotImplemented,
             ret_ty: Ty::Object,
             self_conversion: SelfConversionPolicy::checked(),
+            optional_trailing_args: 0,
         }
     }
 
@@ -1687,6 +1768,16 @@ impl SlotFragmentDef {
         self
     }
 
+    /// See [`SlotDef::optional_trailing_args`].
+    const fn optional_trailing_args(&self) -> usize {
+        self.optional_trailing_args
+    }
+
+    const fn with_optional_trailing_args(mut self, count: usize) -> Self {
+        self.optional_trailing_args = count;
+        self
+    }
+
     fn generate_pyproto_fragment(
         &self,
         cls: &syn::Type,
@@ -1700,6 +1791,8 @@ impl SlotFragmentDef {
             extract_error_mode,
             ret_ty,
             self_conversion,
+            // introspection only, not part of codegen
+            optional_trailing_args: _,
         } = self;
         let fragment_trait = format_ident!("PyClass{}SlotFragment", fragment);
         let method = syn::Ident::new(fragment, Span::call_site());
@@ -1814,10 +1907,14 @@ const __ROR__: SlotFragmentDef = SlotFragmentDef::binary_operator("__ror__");
 
 const __POW__: SlotFragmentDef = SlotFragmentDef::new("__pow__", &[Ty::Object, Ty::Object])
     .extract_error_mode(ExtractErrorMode::NotImplemented)
-    .ret_ty(Ty::Object);
+    .ret_ty(Ty::Object)
+    // `__pow__($self, value, mod=None, /)`
+    .with_optional_trailing_args(1);
 const __RPOW__: SlotFragmentDef = SlotFragmentDef::new("__rpow__", &[Ty::Object, Ty::Object])
     .extract_error_mode(ExtractErrorMode::NotImplemented)
-    .ret_ty(Ty::Object);
+    .ret_ty(Ty::Object)
+    // `__rpow__($self, value, mod=None, /)`
+    .with_optional_trailing_args(1);
 
 const __LT__: SlotFragmentDef = SlotFragmentDef::new("__lt__", &[Ty::Object])
     .extract_error_mode(ExtractErrorMode::NotImplemented)
@@ -1916,4 +2013,19 @@ fn doc_to_optional_cstr(doc: Option<&PythonDoc>, ctx: &Ctx) -> Result<TokenStrea
     } else {
         quote!(::std::option::Option::None)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_short_callable_slots_have_optional_trailing_args() {
+        assert_eq!(__GET__.optional_trailing_args(), 1);
+        assert_eq!(__POW__.optional_trailing_args(), 1);
+        assert_eq!(__RPOW__.optional_trailing_args(), 1);
+        assert_eq!(__ITER__.optional_trailing_args(), 0);
+        assert_eq!(__LT__.optional_trailing_args(), 0);
+        assert_eq!(__IADD__.optional_trailing_args(), 0);
+    }
 }

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 - Python 3.15 support.
+- PyPy 3.12 wheels for Linux aarch64 and musllinux.
+
+### Changed
+- Updated `pyo3` 0.29.0 -> 0.29.3.
 
 ### Removed
 - Python 3.10 support (end of life). Python 3.11 or later is required.

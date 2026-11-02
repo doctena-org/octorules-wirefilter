@@ -24,14 +24,14 @@ pub(crate) mod initconfig;
 pub(crate) mod listobject;
 #[cfg(Py_3_13)]
 pub(crate) mod lock;
-#[cfg(Py_3_14)]
-pub(crate) mod longintrepr;
 pub(crate) mod longobject;
+#[cfg(not(GraalPy))]
 pub(crate) mod marshal;
 #[cfg(all(Py_3_9, not(PyPy)))]
 pub(crate) mod methodobject;
 pub(crate) mod object;
 pub(crate) mod objimpl;
+pub(crate) mod pyatomic;
 pub(crate) mod pydebug;
 pub(crate) mod pyerrors;
 #[cfg(not(PyPy))]
@@ -43,6 +43,7 @@ pub(crate) mod pythonrun;
 pub(crate) mod floatobject;
 pub(crate) mod pyframe;
 pub(crate) mod pyhash;
+pub(crate) mod setobject;
 pub(crate) mod traceback;
 pub(crate) mod tupleobject;
 pub(crate) mod unicodeobject;
@@ -73,9 +74,8 @@ pub use self::initconfig::*;
 pub use self::listobject::*;
 #[cfg(Py_3_13)]
 pub use self::lock::*;
-#[cfg(Py_3_14)]
-pub use self::longintrepr::*;
 pub use self::longobject::*;
+#[cfg(not(GraalPy))]
 pub use self::marshal::*;
 #[cfg(all(Py_3_9, not(PyPy)))]
 pub use self::methodobject::*;
@@ -91,6 +91,7 @@ pub use self::pylifecycle::*;
 pub use self::pymem::*;
 pub use self::pystate::*;
 pub use self::pythonrun::*;
+pub use self::setobject::*;
 pub use self::traceback::*;
 pub use self::tupleobject::*;
 pub use self::unicodeobject::*;

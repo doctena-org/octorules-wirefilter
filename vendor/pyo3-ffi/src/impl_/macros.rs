@@ -15,7 +15,7 @@
 macro_rules! extern_libpython_cpython_private_fn {
     ($(#[$attrs:meta])* $vis:vis $name:ident($($args:tt)*) $(-> $ret:ty)?) => {
         #[cfg_attr(
-            all(windows, target_arch = "x86", not(any(PyPy, GraalPy))),
+            all(windows, pyo3_use_raw_dylib, target_arch = "x86"),
             link_name = concat!("_", stringify!($name))
         )]
         $(#[$attrs])*
@@ -82,6 +82,18 @@ macro_rules! extern_libpython_maybe_private_fn {
     };
     (
         [_PyThreadState_UncheckedGet]
+        $(#[$attrs:meta])* $vis:vis fn $name:ident($($args:tt)*) $(-> $ret:ty)?
+    ) => {
+        extern_libpython_cpython_private_fn! { $(#[$attrs])* $vis $name($($args)*) $(-> $ret)? }
+    };
+    (
+        [_PyInterpreterState_GetEvalFrameFunc]
+        $(#[$attrs:meta])* $vis:vis fn $name:ident($($args:tt)*) $(-> $ret:ty)?
+    ) => {
+        extern_libpython_cpython_private_fn! { $(#[$attrs])* $vis $name($($args)*) $(-> $ret)? }
+    };
+    (
+        [_PyInterpreterState_SetEvalFrameFunc]
         $(#[$attrs:meta])* $vis:vis fn $name:ident($($args:tt)*) $(-> $ret:ty)?
     ) => {
         extern_libpython_cpython_private_fn! { $(#[$attrs])* $vis $name($($args)*) $(-> $ret)? }
@@ -269,12 +281,16 @@ macro_rules! extern_libpython {
             "python313", "python313_d",
             "python314", "python314_d",
             "python315", "python315_d",
+            "python316", "python316_d",
             // free-threaded builds (3.13+)
             "python313t", "python313t_d",
             "python314t", "python314t_d",
             "python315t", "python315t_d",
+            "python316t", "python316t_d",
             // PyPy (DLL is libpypy3.X-c.dll, not pythonXY.dll)
             "libpypy3.11-c",
+            // GraalPy DLL
+            "python-native",
         );
     };
     // Internal: generate cfg_attr for each DLL name. One of these will be selected
@@ -287,11 +303,12 @@ macro_rules! extern_libpython {
     // separate cfg_attr arms per architecture.
     (@impl $abi:literal { $($body:tt)* } $($dll:literal),* $(,)?) => {
         $(
-            #[cfg_attr(all(windows, target_arch = "x86", pyo3_dll = $dll),
+            #[cfg_attr(all(windows, pyo3_use_raw_dylib, target_arch = "x86", pyo3_dll = $dll),
                 link(name = $dll, kind = "raw-dylib", import_name_type = "undecorated"))]
-            #[cfg_attr(all(windows, not(target_arch = "x86"), pyo3_dll = $dll),
+            #[cfg_attr(all(windows, pyo3_use_raw_dylib, not(target_arch = "x86"), pyo3_dll = $dll),
                 link(name = $dll, kind = "raw-dylib"))]
         )*
+        #[cfg_attr(all(windows, not(pyo3_use_raw_dylib)), link(name = "pythonXY"))]
         extern $abi {
             extern_libpython_items! { $($body)* }
         }

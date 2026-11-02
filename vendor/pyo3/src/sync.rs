@@ -88,11 +88,13 @@ impl<T> Default for GILOnceCell<T> {
     }
 }
 
+// SAFETY: Sync is only implemented if the inner type is Sync
 // T: Send is needed for Sync because the thread which drops the GILOnceCell can be different
 // to the thread which fills it. (e.g. think scoped thread which fills the cell and then exits,
 // leaving the cell to be dropped by the main thread).
 #[allow(deprecated)]
 unsafe impl<T: Send + Sync> Sync for GILOnceCell<T> {}
+// SAFETY: send is only implemented if the inner type is send
 #[allow(deprecated)]
 unsafe impl<T: Send> Send for GILOnceCell<T> {}
 
@@ -110,6 +112,16 @@ impl<T> GILOnceCell<T> {
     /// Get a reference to the contained value, or `None` if the cell has not yet been written.
     #[inline]
     pub fn get(&self, _py: Python<'_>) -> Option<&T> {
+        if self.once.is_completed() {
+            // SAFETY: the cell has been written.
+            Some(unsafe { (*self.data.get()).assume_init_ref() })
+        } else {
+            None
+        }
+    }
+
+    #[cfg(Py_3_12)]
+    pub(crate) fn get_during_gc(&self) -> Option<&T> {
         if self.once.is_completed() {
             // SAFETY: the cell has been written.
             Some(unsafe { (*self.data.get()).assume_init_ref() })

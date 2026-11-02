@@ -76,6 +76,18 @@ impl<T: PyClass> LazyTypeObject<T> {
             T::items_iter(),
         )
     }
+
+    /// Gets the type object contained without performing any initialization work.
+    /// This avoids unsafe operations during GC.
+    #[cfg(Py_3_12)]
+    pub(crate) fn get_during_gc(&self) -> &Py<PyType> {
+        &self
+            .0
+            .value
+            .get_during_gc()
+            .expect("PyClass type object should have been created to reach GC")
+            .type_object
+    }
 }
 
 impl LazyTypeObjectInner {
@@ -244,7 +256,7 @@ fn initialize_tp_dict(
     // the POV of other threads.
     for (key, val) in items {
         crate::err::error_on_minusone(py, unsafe {
-            ffi::PyObject_SetAttrString(type_object, key.as_ptr(), val.into_ptr())
+            ffi::PyObject_SetAttrString(type_object, key.as_ptr(), val.as_ptr())
         })?;
     }
     Ok(())

@@ -321,7 +321,7 @@ pub struct PyHeapTypeObject {
 #[cfg(not(Py_3_11))]
 pub unsafe fn PyHeapType_GET_MEMBERS(etype: *mut PyHeapTypeObject) -> *mut PyMemberDef {
     let py_type = object::Py_TYPE(etype as *mut object::PyObject);
-    let ptr = etype.offset((*py_type).tp_basicsize);
+    let ptr = etype.byte_offset((*py_type).tp_basicsize);
     ptr as *mut PyMemberDef
 }
 
@@ -343,8 +343,6 @@ extern_libpython! {
 
     // skipped private _PyObject_GetDictPtr
     pub fn PyObject_CallFinalizer(arg1: *mut PyObject);
-    #[cfg_attr(PyPy, link_name = "PyPyObject_CallFinalizerFromDealloc")]
-    pub fn PyObject_CallFinalizerFromDealloc(arg1: *mut PyObject) -> c_int;
 
     // skipped private _PyObject_GenericGetAttrWithDict
     // skipped private _PyObject_GenericSetAttrWithDict
@@ -370,6 +368,7 @@ extern_libpython! {
 // skipped Py_TRASHCAN_END
 
 // skipped PyObject_GetItemData
+// skipped PyObject_GetItemData_DuringGC
 
 // skipped PyObject_VisitManagedDict
 // skipped _PyObject_SetManagedDict

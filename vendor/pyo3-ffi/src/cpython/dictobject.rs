@@ -2,10 +2,12 @@
 use crate::object::*;
 #[cfg(not(any(PyPy, GraalPy)))]
 use crate::pyport::Py_ssize_t;
+#[cfg(all(GraalPy, Py_3_13))]
+use crate::PyObject;
 
 #[cfg(all(not(PyPy), Py_3_13))]
 use core::ffi::c_char;
-#[cfg(all(not(PyPy), Py_3_12))]
+#[cfg(Py_3_12)]
 use core::ffi::c_int;
 
 #[cfg(not(PyPy))]
@@ -54,6 +56,7 @@ extern_libpython! {
 
 extern_libpython! {
     #[cfg(not(GraalPy))]
+    #[cfg_attr(PyPy, link_name = "PyPyDict_SetDefault")]
     pub fn PyDict_SetDefault(
         mp: *mut PyObject,
         key: *mut PyObject,
